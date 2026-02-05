@@ -1,0 +1,14 @@
+# SearXNG rate limiter configuration
+# Disabled for LLM usage - adjust if exposing publicly
+
+[botdetection.ip_limit]
+# Disable IP-based rate limiting for local LLM usage
+link_token = false
+
+[botdetection.ip_lists]
+pass_ip = [
+    '192.168.0.0/16',
+    '172.16.0.0/12',
+    '10.0.0.0/8',
+    '127.0.0.1',
+]

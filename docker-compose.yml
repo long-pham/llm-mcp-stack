@@ -1,0 +1,181 @@
+services:
+  # ===========================================
+  # SearXNG - Privacy-respecting metasearch engine
+  # ===========================================
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "38080:8080"
+    volumes:
+      - ./searxng/config:/etc/searxng:rw
+      - ./searxng/data:/var/cache/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:38080/
+      - INSTANCE_NAME=llm-search
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================
+  # SearXNG MCP Server - Connects SearXNG to MCP
+  # ===========================================
+  searxng-mcp:
+    image: isokoliuk/mcp-searxng:latest
+    container_name: searxng-mcp
+    restart: unless-stopped
+    ports:
+      - "38081:8080"
+    environment:
+      - SEARXNG_URL=http://searxng:8080
+      - MCP_HTTP_PORT=8080
+    depends_on:
+      searxng:
+        condition: service_healthy
+    networks:
+      - mcp-network
+
+  # ===========================================
+  # Crawl4AI - Web crawling and scraping MCP
+  # ===========================================
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    container_name: crawl4ai
+    restart: unless-stopped
+    ports:
+      - "11235:11235"
+    environment:
+      # API token optional - only set if you need auth
+      - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN-}
+      - MAX_CONCURRENT_TASKS=${CRAWL4AI_MAX_TASKS:-5}
+    volumes:
+      - crawl4ai-data:/app/data
+    # Shared memory for Chrome - critical for rendering
+    shm_size: 2g
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+        reservations:
+          memory: 1g
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ===========================================
+  # DuckDuckGo MCP - Backup/alternative search
+  # ===========================================
+  duckduckgo-mcp:
+    image: mekayelanik/duckduckgo-mcp:stable
+    container_name: duckduckgo-mcp
+    hostname: duckduckgo-mcp
+    domainname: local
+    restart: unless-stopped
+    ports:
+      - "38020:8020"
+    environment:
+      - PORT=8020
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/Los_Angeles}
+      - PROTOCOL=SHTTP
+      - CORS=*
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8020/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ===========================================
+  # MetaMCP - MCP Aggregator/Gateway
+  # ===========================================
+  metamcp-postgres:
+    image: postgres:16-alpine
+    container_name: metamcp-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-metamcp_db}
+      POSTGRES_USER: ${POSTGRES_USER:-metamcp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-m3t4mcp}
+    # Uncomment to expose Postgres externally (not recommended for security)
+    # ports:
+    #   - "${POSTGRES_EXTERNAL_PORT:-9433}:5432"
+    volumes:
+      - metamcp-postgres:/var/lib/postgresql/data
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-metamcp_user} -d ${POSTGRES_DB:-metamcp_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  metamcp:
+    image: ghcr.io/metatool-ai/metamcp:latest
+    container_name: metamcp
+    pull_policy: always
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "12008:12008"
+    environment:
+      # Postgres connection
+      POSTGRES_HOST: ${POSTGRES_HOST:-metamcp-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-metamcp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-m3t4mcp}
+      POSTGRES_DB: ${POSTGRES_DB:-metamcp_db}
+      # Database URL
+      DATABASE_URL: postgresql://${POSTGRES_USER:-metamcp_user}:${POSTGRES_PASSWORD:-m3t4mcp}@${POSTGRES_HOST:-metamcp-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-metamcp_db}
+      # Application URLs
+      APP_URL: ${APP_URL:-http://localhost:12008}
+      NEXT_PUBLIC_APP_URL: ${APP_URL:-http://localhost:12008}
+      # Auth
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      # Docker networking - CRITICAL for inter-container MCP communication
+      TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL: ${TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL:-true}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      metamcp-postgres:
+        condition: service_healthy
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:12008/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  mcp-network:
+    driver: bridge
+
+volumes:
+  crawl4ai-data:
+  metamcp-postgres:

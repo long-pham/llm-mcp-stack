@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Task",
+      "TodoWrite",
+      "mcp__firecrawl__firecrawl_search",
+      "mcp__github__search_repositories",
+      "mcp__github__get_file_contents",
+      "mcp__firecrawl__firecrawl_scrape",
+      "mcp__firecrawl__firecrawl_agent",
+      "mcp__apple-fetch__AppleSearch",
+      "mcp__github__*",
+      "mcp__radar-mcp-server__*",
+      "mcp__swe-codesearch__*",
+      "mcp__confluence-sd__*",
+      "mcp__confluence-corp__*",
+      "mcp__confluence-seg__*",
+      "mcp__apple-fetch__*",
+      "mcp__xcuiagent__*",
+      "mcp__sequential-thinking__*",
+      "mcp__memory__*",
+      "mcp__magic__*",
+      "mcp__railway__*",
+      "mcp__filesystem__*",
+      "mcp__crawl4ai__md",
+      "mcp__crawl4ai__ask"
+    ],
+    "deny": []
+  }
+}
