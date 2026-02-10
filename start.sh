@@ -46,6 +46,13 @@ fi
 # Reload after generating secrets
 source .env
 
+# Set default ports if not configured
+SEARXNG_PORT=${SEARXNG_PORT:-38080}
+SEARXNG_MCP_PORT=${SEARXNG_MCP_PORT:-38081}
+CRAWL4AI_PORT=${CRAWL4AI_PORT:-11235}
+DUCKDUCKGO_MCP_PORT=${DUCKDUCKGO_MCP_PORT:-38020}
+METAMCP_PORT=${METAMCP_PORT:-12008}
+
 # Start all services
 echo "Starting LLM MCP services..."
 docker compose up -d
@@ -57,17 +64,17 @@ sleep 5
 
 echo ""
 echo "Services started! Endpoints:"
-echo "  - SearXNG:        http://localhost:38080"
-echo "  - SearXNG MCP:    http://localhost:38081/mcp"
-echo "  - Crawl4AI:       http://localhost:11235"
-echo "  - Crawl4AI MCP:   http://localhost:11235/mcp/sse"
-echo "  - DuckDuckGo MCP: http://localhost:38020"
-echo "  - MetaMCP:        http://localhost:12008"
+echo "  - SearXNG:        http://localhost:${SEARXNG_PORT}"
+echo "  - SearXNG MCP:    http://localhost:${SEARXNG_MCP_PORT}/mcp"
+echo "  - Crawl4AI:       http://localhost:${CRAWL4AI_PORT}"
+echo "  - Crawl4AI MCP:   http://localhost:${CRAWL4AI_PORT}/mcp/sse"
+echo "  - DuckDuckGo MCP: http://localhost:${DUCKDUCKGO_MCP_PORT}"
+echo "  - MetaMCP:        http://localhost:${METAMCP_PORT}"
 echo ""
 echo "To add to Claude Code:"
-echo "  claude mcp add --transport sse crawl4ai http://localhost:11235/mcp/sse"
-echo "  claude mcp add --transport http searxng http://localhost:38081/mcp"
-echo "  claude mcp add --transport http duckduckgo http://localhost:38020/mcp"
+echo "  claude mcp add --transport sse crawl4ai http://localhost:${CRAWL4AI_PORT}/mcp/sse"
+echo "  claude mcp add --transport http searxng http://localhost:${SEARXNG_MCP_PORT}/mcp"
+echo "  claude mcp add --transport http duckduckgo http://localhost:${DUCKDUCKGO_MCP_PORT}/mcp"
 echo ""
 echo "Check status: docker compose ps"
 echo "View logs:    docker compose logs -f"

@@ -7,12 +7,12 @@ services:
     container_name: searxng
     restart: unless-stopped
     ports:
-      - "38080:8080"
+      - "${SEARXNG_PORT:-38080}:8080"
     volumes:
       - ./searxng/config:/etc/searxng:rw
       - ./searxng/data:/var/cache/searxng:rw
     environment:
-      - SEARXNG_BASE_URL=http://localhost:38080/
+      - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-38080}/
       - INSTANCE_NAME=llm-search
       - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:?SEARXNG_SECRET_KEY is required in .env}
     cap_drop:
@@ -38,7 +38,7 @@ services:
     container_name: searxng-mcp
     restart: unless-stopped
     ports:
-      - "38081:8080"
+      - "${SEARXNG_MCP_PORT:-38081}:8080"
     environment:
       - SEARXNG_URL=http://searxng:8080
       - MCP_HTTP_PORT=8080
@@ -56,7 +56,7 @@ services:
     container_name: crawl4ai
     restart: unless-stopped
     ports:
-      - "11235:11235"
+      - "${CRAWL4AI_PORT:-11235}:11235"
     environment:
       # API token optional - only set if you need auth
       - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN-}
@@ -90,7 +90,7 @@ services:
     domainname: local
     restart: unless-stopped
     ports:
-      - "38020:8020"
+      - "${DUCKDUCKGO_MCP_PORT:-38020}:8020"
     environment:
       - PORT=8020
       - PUID=${PUID:-1000}
@@ -142,7 +142,7 @@ services:
     env_file:
       - .env
     ports:
-      - "12008:12008"
+      - "${METAMCP_PORT:-12008}:12008"
     environment:
       # Postgres connection
       POSTGRES_HOST: ${POSTGRES_HOST:-metamcp-postgres}
