@@ -9,40 +9,42 @@ cd "$(dirname "$0")"
 if [ ! -f .env ]; then
     echo "Creating .env from .env.example..."
     cp .env.example .env
-    echo ""
-    echo "WARNING: .env created from template. Please review and update:"
-    echo "  - POSTGRES_PASSWORD (generate: openssl rand -base64 24)"
-    echo "  - BETTER_AUTH_SECRET (generate: openssl rand -base64 32)"
-    echo ""
-    echo "SEARXNG_SECRET_KEY will be auto-generated."
-    read -p "Press Enter to continue or Ctrl+C to edit .env first..."
 fi
 
-# Validate and auto-generate secrets
+# Helper function to update or append env var
+update_env() {
+    local key=$1
+    local value=$2
+    if grep -q "^${key}=" .env; then
+        sed -i.bak "s/^${key}=.*/${key}=${value}/" .env && rm -f .env.bak
+    else
+        echo "${key}=${value}" >> .env
+    fi
+}
+
+# Load current values
 source .env
+
+# Auto-generate POSTGRES_PASSWORD if missing or placeholder
+if [[ -z "$POSTGRES_PASSWORD" ]] || [[ "$POSTGRES_PASSWORD" == *"your-secure-password"* ]] || [[ "$POSTGRES_PASSWORD" == *"CHANGE_ME"* ]]; then
+    echo "Generating POSTGRES_PASSWORD..."
+    update_env "POSTGRES_PASSWORD" "$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)"
+fi
+
+# Auto-generate BETTER_AUTH_SECRET if missing or placeholder
+if [[ -z "$BETTER_AUTH_SECRET" ]] || [[ "$BETTER_AUTH_SECRET" == *"your-auth-secret"* ]] || [[ "$BETTER_AUTH_SECRET" == *"CHANGE_ME"* ]]; then
+    echo "Generating BETTER_AUTH_SECRET..."
+    update_env "BETTER_AUTH_SECRET" "$(openssl rand -base64 32)"
+fi
 
 # Auto-generate SEARXNG_SECRET_KEY if missing or placeholder
 if [[ -z "$SEARXNG_SECRET_KEY" ]] || [[ "$SEARXNG_SECRET_KEY" == *"your-searxng-secret"* ]]; then
-    NEW_SECRET=$(openssl rand -hex 32)
     echo "Generating SEARXNG_SECRET_KEY..."
-    if grep -q "^SEARXNG_SECRET_KEY=" .env; then
-        sed -i.bak "s/^SEARXNG_SECRET_KEY=.*/SEARXNG_SECRET_KEY=$NEW_SECRET/" .env && rm -f .env.bak
-    else
-        echo "SEARXNG_SECRET_KEY=$NEW_SECRET" >> .env
-    fi
-    source .env
+    update_env "SEARXNG_SECRET_KEY" "$(openssl rand -hex 32)"
 fi
 
-# Validate other required secrets
-if [[ "$POSTGRES_PASSWORD" == *"CHANGE_ME"* ]] || [[ "$POSTGRES_PASSWORD" == *"your-secure-password"* ]] || \
-   [[ "$BETTER_AUTH_SECRET" == *"CHANGE_ME"* ]] || [[ "$BETTER_AUTH_SECRET" == *"your-auth-secret"* ]]; then
-    echo "ERROR: Please update required secrets in .env"
-    echo ""
-    echo "Required secrets:"
-    echo "  POSTGRES_PASSWORD:   openssl rand -base64 24"
-    echo "  BETTER_AUTH_SECRET:  openssl rand -base64 32"
-    exit 1
-fi
+# Reload after generating secrets
+source .env
 
 # Start all services
 echo "Starting LLM MCP services..."
