@@ -81,33 +81,6 @@ services:
       start_period: 30s
 
   # ===========================================
-  # DuckDuckGo MCP - Backup/alternative search
-  # ===========================================
-  duckduckgo-mcp:
-    image: mekayelanik/duckduckgo-mcp:stable
-    container_name: duckduckgo-mcp
-    hostname: duckduckgo-mcp
-    domainname: local
-    restart: unless-stopped
-    ports:
-      - "${DUCKDUCKGO_MCP_PORT:-38020}:8020"
-    environment:
-      - PORT=8020
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-America/Los_Angeles}
-      - PROTOCOL=SHTTP
-      - CORS=http://localhost:*
-    networks:
-      - mcp-network
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8020/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
-  # ===========================================
   # MetaMCP - MCP Aggregator/Gateway
   # ===========================================
   metamcp-postgres:
