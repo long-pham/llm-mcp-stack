@@ -96,7 +96,7 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-America/Los_Angeles}
       - PROTOCOL=SHTTP
-      - CORS=*
+      - CORS=http://localhost:*
     networks:
       - mcp-network
     healthcheck:
@@ -118,7 +118,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-metamcp_db}
       POSTGRES_USER: ${POSTGRES_USER:-metamcp_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-m3t4mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env}
     # Uncomment to expose Postgres externally (not recommended for security)
     # ports:
     #   - "${POSTGRES_EXTERNAL_PORT:-9433}:5432"
@@ -147,10 +147,10 @@ services:
       POSTGRES_HOST: ${POSTGRES_HOST:-metamcp-postgres}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       POSTGRES_USER: ${POSTGRES_USER:-metamcp_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-m3t4mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env}
       POSTGRES_DB: ${POSTGRES_DB:-metamcp_db}
       # Database URL
-      DATABASE_URL: postgresql://${POSTGRES_USER:-metamcp_user}:${POSTGRES_PASSWORD:-m3t4mcp}@${POSTGRES_HOST:-metamcp-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-metamcp_db}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-metamcp_user}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-metamcp-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-metamcp_db}
       # Application URLs
       APP_URL: ${APP_URL:-http://localhost:12008}
       NEXT_PUBLIC_APP_URL: ${APP_URL:-http://localhost:12008}
