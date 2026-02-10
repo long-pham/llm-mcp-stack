@@ -15,8 +15,9 @@ fi
 update_env() {
     local key=$1
     local value=$2
+    # Use | as sed delimiter to avoid issues with / in base64 values
     if grep -q "^${key}=" .env; then
-        sed -i.bak "s/^${key}=.*/${key}=${value}/" .env && rm -f .env.bak
+        sed -i.bak "s|^${key}=.*|${key}=${value}|" .env && rm -f .env.bak
     else
         echo "${key}=${value}" >> .env
     fi
