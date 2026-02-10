@@ -14,6 +14,7 @@ if [ ! -f .env ]; then
     echo "  - POSTGRES_PASSWORD (generate: openssl rand -base64 24)"
     echo "  - BETTER_AUTH_SECRET (generate: openssl rand -base64 32)"
     echo ""
+    echo "SEARXNG_SECRET_KEY will be auto-generated."
     read -p "Press Enter to continue or Ctrl+C to edit .env first..."
 fi
 
@@ -29,7 +30,7 @@ if [[ -z "$SEARXNG_SECRET_KEY" ]] || [[ "$SEARXNG_SECRET_KEY" == *"your-searxng-
     else
         echo "SEARXNG_SECRET_KEY=$NEW_SECRET" >> .env
     fi
-    export SEARXNG_SECRET_KEY="$NEW_SECRET"
+    source .env
 fi
 
 # Validate other required secrets
