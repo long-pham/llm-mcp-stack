@@ -19,10 +19,15 @@ fi
 
 # Validate required variables
 source .env
-if [[ "$POSTGRES_PASSWORD" == *"CHANGE_ME"* ]] || [[ "$BETTER_AUTH_SECRET" == *"CHANGE_ME"* ]]; then
-    echo "ERROR: Please update POSTGRES_PASSWORD and BETTER_AUTH_SECRET in .env"
-    echo "  Generate password: openssl rand -base64 24"
-    echo "  Generate secret:   openssl rand -base64 32"
+if [[ "$POSTGRES_PASSWORD" == *"CHANGE_ME"* ]] || [[ "$POSTGRES_PASSWORD" == *"your-secure-password"* ]] || \
+   [[ "$BETTER_AUTH_SECRET" == *"CHANGE_ME"* ]] || [[ "$BETTER_AUTH_SECRET" == *"your-auth-secret"* ]] || \
+   [[ "$SEARXNG_SECRET_KEY" == *"your-searxng-secret"* ]] || [[ -z "$SEARXNG_SECRET_KEY" ]]; then
+    echo "ERROR: Please update required secrets in .env"
+    echo ""
+    echo "Required secrets:"
+    echo "  POSTGRES_PASSWORD:   openssl rand -base64 24"
+    echo "  BETTER_AUTH_SECRET:  openssl rand -base64 32"
+    echo "  SEARXNG_SECRET_KEY:  openssl rand -hex 32"
     exit 1
 fi
 

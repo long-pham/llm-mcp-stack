@@ -1,11 +1,14 @@
 # SearXNG rate limiter configuration
-# Disabled for LLM usage - adjust if exposing publicly
+# Rate limiting disabled for local LLM usage
+# WARNING: If exposing publicly, enable rate limiting in settings.yml and configure limits here
 
 [botdetection.ip_limit]
 # Disable IP-based rate limiting for local LLM usage
 link_token = false
 
 [botdetection.ip_lists]
+# Allow all private network ranges (RFC 1918) for local/Docker access
+# This is appropriate for local development but allows any device on the local network
 pass_ip = [
     '192.168.0.0/16',
     '172.16.0.0/12',

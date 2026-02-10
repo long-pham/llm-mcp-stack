@@ -9,6 +9,8 @@ general:
   enable_metrics: true
 
 search:
+  # Safe search disabled for unrestricted LLM queries
+  # Set to 1 (moderate) or 2 (strict) if content filtering is needed
   safe_search: 0
   autocomplete: "duckduckgo"
   default_lang: "en"
@@ -17,11 +19,15 @@ search:
     - json
 
 server:
-  # Bind to all interfaces for Docker
+  # Bind to all interfaces for Docker networking
+  # WARNING: Ensure firewall blocks external access to port 38080
   bind_address: "0.0.0.0"
   port: 8080
-  secret_key: "fe3b070c38906c1a072fd76cefdb8aea194c89885bb35ec21b54dbfdb2f9f18d"
-  limiter: false  # Disable rate limiting for LLM usage
+  # Secret key loaded from environment variable (set SEARXNG_SECRET_KEY in .env)
+  secret_key: "${SEARXNG_SECRET_KEY}"
+  # Rate limiting disabled for LLM usage
+  # WARNING: Do NOT expose this instance to the public internet without enabling rate limiting
+  limiter: false
   public_instance: false
 
 ui:
