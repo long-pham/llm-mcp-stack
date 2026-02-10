@@ -17,17 +17,29 @@ if [ ! -f .env ]; then
     read -p "Press Enter to continue or Ctrl+C to edit .env first..."
 fi
 
-# Validate required variables
+# Validate and auto-generate secrets
 source .env
+
+# Auto-generate SEARXNG_SECRET_KEY if missing or placeholder
+if [[ -z "$SEARXNG_SECRET_KEY" ]] || [[ "$SEARXNG_SECRET_KEY" == *"your-searxng-secret"* ]]; then
+    NEW_SECRET=$(openssl rand -hex 32)
+    echo "Generating SEARXNG_SECRET_KEY..."
+    if grep -q "^SEARXNG_SECRET_KEY=" .env; then
+        sed -i.bak "s/^SEARXNG_SECRET_KEY=.*/SEARXNG_SECRET_KEY=$NEW_SECRET/" .env && rm -f .env.bak
+    else
+        echo "SEARXNG_SECRET_KEY=$NEW_SECRET" >> .env
+    fi
+    export SEARXNG_SECRET_KEY="$NEW_SECRET"
+fi
+
+# Validate other required secrets
 if [[ "$POSTGRES_PASSWORD" == *"CHANGE_ME"* ]] || [[ "$POSTGRES_PASSWORD" == *"your-secure-password"* ]] || \
-   [[ "$BETTER_AUTH_SECRET" == *"CHANGE_ME"* ]] || [[ "$BETTER_AUTH_SECRET" == *"your-auth-secret"* ]] || \
-   [[ "$SEARXNG_SECRET_KEY" == *"your-searxng-secret"* ]] || [[ -z "$SEARXNG_SECRET_KEY" ]]; then
+   [[ "$BETTER_AUTH_SECRET" == *"CHANGE_ME"* ]] || [[ "$BETTER_AUTH_SECRET" == *"your-auth-secret"* ]]; then
     echo "ERROR: Please update required secrets in .env"
     echo ""
     echo "Required secrets:"
     echo "  POSTGRES_PASSWORD:   openssl rand -base64 24"
     echo "  BETTER_AUTH_SECRET:  openssl rand -base64 32"
-    echo "  SEARXNG_SECRET_KEY:  openssl rand -hex 32"
     exit 1
 fi
 
