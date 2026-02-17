@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +13,10 @@ from httpx import ASGITransport, AsyncClient
 
 import openai_proxy
 from openai_proxy import (
+    _build_anthropic_kwargs,
+    _build_cli_cmd,
     _extract_cli_text,
+    _make_chunk,
     _map_stop_reason,
     _messages_to_prompt_string,
     _resolve_model,
@@ -31,10 +33,15 @@ from openai_proxy import (
 def _reset_singletons():
     """Reset module-level singletons between tests."""
     openai_proxy._anthropic_client = None
-    openai_proxy._CLI_ENV = None
     yield
     openai_proxy._anthropic_client = None
-    openai_proxy._CLI_ENV = None
+
+
+@pytest.fixture(autouse=True)
+def _disable_auth():
+    """Disable auth for all tests by default."""
+    with patch.object(openai_proxy, "API_KEY", ""):
+        yield
 
 
 @pytest.fixture()
@@ -49,7 +56,7 @@ def async_client():
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: helper functions
+# Unit tests: _resolve_model
 # ---------------------------------------------------------------------------
 
 
@@ -80,8 +87,16 @@ class TestResolveModel:
         assert _resolve_model("o1") == "claude-opus-4-6"
         assert _resolve_model("o1-preview") == "claude-opus-4-6"
 
-    def test_unknown_model_returns_default(self):
-        assert _resolve_model("some-unknown-model") == openai_proxy.DEFAULT_MODEL
+    def test_o3_maps_to_opus(self):
+        assert _resolve_model("o3") == "claude-opus-4-6"
+
+    def test_unknown_model_passes_through(self):
+        assert _resolve_model("some-custom-model") == "some-custom-model"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _map_stop_reason
+# ---------------------------------------------------------------------------
 
 
 class TestMapStopReason:
@@ -99,6 +114,11 @@ class TestMapStopReason:
 
     def test_unknown(self):
         assert _map_stop_reason("something_else") == "stop"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _translate_messages
+# ---------------------------------------------------------------------------
 
 
 class TestTranslateMessages:
@@ -166,15 +186,14 @@ class TestTranslateMessages:
         assert system is None
         assert msgs == [{"role": "user", "content": "(empty)"}]
 
-    def test_non_string_system_content_serialized(self):
+    def test_list_system_content_flattened(self):
         system, msgs = _translate_messages([
             {"role": "system", "content": ["structured", "data"]},
             {"role": "user", "content": "Hi"},
         ])
-        assert system == json.dumps(["structured", "data"])
+        assert system == "structured\ndata"
 
-    def test_function_role_becomes_user(self):
-        """Non-user/non-assistant roles like 'function' or 'tool' become 'user'."""
+    def test_tool_role_becomes_user(self):
         system, msgs = _translate_messages([
             {"role": "user", "content": "Use a tool"},
             {"role": "assistant", "content": "Calling tool..."},
@@ -183,15 +202,134 @@ class TestTranslateMessages:
         assert msgs[-1]["role"] == "user"
         assert msgs[-1]["content"] == "tool result"
 
+    def test_list_content_parts_flattened(self):
+        system, msgs = _translate_messages([
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Look at this"},
+                    {"type": "text", "text": "and tell me"},
+                ],
+            }
+        ])
+        assert "Look at this" in msgs[0]["content"]
+        assert "and tell me" in msgs[0]["content"]
+
+    def test_list_content_with_plain_strings(self):
+        system, msgs = _translate_messages([
+            {"role": "user", "content": ["Hello", "World"]},
+        ])
+        assert "Hello" in msgs[0]["content"]
+        assert "World" in msgs[0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _build_anthropic_kwargs
+# ---------------------------------------------------------------------------
+
+
+class TestBuildAnthropicKwargs:
+    def test_basic_kwargs(self):
+        body = {
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["model"] == "claude-sonnet-4-5-20250929"
+        assert kwargs["max_tokens"] == 4096
+        assert kwargs["messages"] == [{"role": "user", "content": "Hi"}]
+        assert "system" not in kwargs
+        assert "temperature" not in kwargs
+
+    def test_system_included(self):
+        body = {
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [
+                {"role": "system", "content": "Be helpful"},
+                {"role": "user", "content": "Hi"},
+            ],
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["system"] == "Be helpful"
+
+    def test_temperature_included(self):
+        body = {
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "temperature": 0.5,
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["temperature"] == 0.5
+
+    def test_custom_max_tokens(self):
+        body = {
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 200,
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["max_tokens"] == 200
+
+    def test_model_mapping(self):
+        body = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["model"] == "claude-sonnet-4-5-20250929"
+
+    def test_no_model_uses_default(self):
+        body = {"messages": [{"role": "user", "content": "Hi"}]}
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["model"] == openai_proxy.DEFAULT_MODEL
+
+    def test_top_p_forwarded(self):
+        body = {
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "top_p": 0.9,
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["top_p"] == 0.9
+
+    def test_stop_string_converted_to_list(self):
+        body = {
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stop": "END",
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["stop_sequences"] == ["END"]
+
+    def test_stop_list_forwarded(self):
+        body = {
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stop": ["END", "STOP"],
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["stop_sequences"] == ["END", "STOP"]
+
+    def test_max_tokens_zero_preserved(self):
+        """max_tokens=0 should not be replaced by the default."""
+        body = {
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 0,
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["max_tokens"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _extract_cli_text
+# ---------------------------------------------------------------------------
+
 
 class TestExtractCliText:
     def test_content_block_delta(self):
         event = {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hello"}}
         assert _extract_cli_text(event) == "hello"
-
-    def test_result_event(self):
-        event = {"type": "result", "result": "final answer"}
-        assert _extract_cli_text(event) == "final answer"
 
     def test_assistant_string_message(self):
         event = {"type": "assistant", "message": "hi"}
@@ -207,6 +345,15 @@ class TestExtractCliText:
     def test_content_block_delta_wrong_subtype(self):
         event = {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "{}"}}
         assert _extract_cli_text(event) is None
+
+    def test_result_event_returns_none(self):
+        """Result events should not emit text to avoid double-emit."""
+        assert _extract_cli_text({"type": "result", "result": "final"}) is None
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _messages_to_prompt_string
+# ---------------------------------------------------------------------------
 
 
 class TestMessagesToPromptString:
@@ -234,6 +381,95 @@ class TestMessagesToPromptString:
 
 
 # ---------------------------------------------------------------------------
+# Unit tests: _build_cli_cmd
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCliCmd:
+    def test_basic_command(self):
+        cmd = _build_cli_cmd("Hello")
+        assert cmd[0] == openai_proxy.CLAUDE_CLI
+        assert "-p" in cmd
+        assert "Hello" in cmd
+        assert "--output-format" in cmd
+        assert "json" in cmd
+
+    def test_with_system_prompt(self):
+        cmd = _build_cli_cmd("Hello", system_prompt="Be helpful")
+        assert "--append-system-prompt" in cmd
+        idx = cmd.index("--append-system-prompt")
+        assert cmd[idx + 1] == "Be helpful"
+
+    def test_with_model(self):
+        cmd = _build_cli_cmd("Hello", model="claude-opus-4-6")
+        assert "--model" in cmd
+        idx = cmd.index("--model")
+        assert cmd[idx + 1] == "claude-opus-4-6"
+
+    def test_with_max_tokens(self):
+        cmd = _build_cli_cmd("Hello", max_tokens=500)
+        assert "--max-tokens" in cmd
+        idx = cmd.index("--max-tokens")
+        assert cmd[idx + 1] == "500"
+
+    def test_without_max_tokens(self):
+        cmd = _build_cli_cmd("Hello")
+        assert "--max-tokens" not in cmd
+
+    def test_streaming_format(self):
+        cmd = _build_cli_cmd("Hello", stream=True)
+        assert "stream-json" in cmd
+        assert "--verbose" in cmd
+
+    def test_non_streaming_format(self):
+        cmd = _build_cli_cmd("Hello", stream=False)
+        assert "json" in cmd
+        assert "--verbose" not in cmd
+
+    def test_with_session_id(self):
+        cmd = _build_cli_cmd("Hello", session_id="abc123")
+        assert "--session-id" in cmd
+        idx = cmd.index("--session-id")
+        assert cmd[idx + 1] == "abc123"
+
+    def test_without_session_id(self):
+        cmd = _build_cli_cmd("Hello")
+        assert "--session-id" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _make_chunk
+# ---------------------------------------------------------------------------
+
+
+class TestMakeChunk:
+    def test_content_chunk(self):
+        chunk = _make_chunk("id1", 100, "model", content="Hello")
+        assert chunk["id"] == "id1"
+        assert chunk["object"] == "chat.completion.chunk"
+        assert chunk["choices"][0]["delta"]["content"] == "Hello"
+        assert chunk["choices"][0]["finish_reason"] is None
+
+    def test_finish_chunk(self):
+        chunk = _make_chunk("id1", 100, "model", finish_reason="stop")
+        assert chunk["choices"][0]["finish_reason"] == "stop"
+        assert "content" not in chunk["choices"][0]["delta"]
+
+    def test_empty_content_not_in_delta(self):
+        chunk = _make_chunk("id1", 100, "model")
+        assert "content" not in chunk["choices"][0]["delta"]
+
+    def test_usage_included(self):
+        usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        chunk = _make_chunk("id1", 100, "model", usage=usage)
+        assert chunk["usage"] == usage
+
+    def test_no_usage_by_default(self):
+        chunk = _make_chunk("id1", 100, "model")
+        assert "usage" not in chunk
+
+
+# ---------------------------------------------------------------------------
 # Route tests: health and models
 # ---------------------------------------------------------------------------
 
@@ -253,7 +489,7 @@ class TestModelsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["object"] == "list"
-        assert len(data["data"]) == 3
+        assert len(data["data"]) > 3  # Claude models + aliases
 
     def test_model_format(self, client):
         resp = client.get("/v1/models")
@@ -263,34 +499,83 @@ class TestModelsEndpoint:
         assert model["owned_by"] == "anthropic"
         assert "created" in model
 
-    def test_all_models_present(self, client):
+    def test_all_claude_models_present(self, client):
         resp = client.get("/v1/models")
         ids = {m["id"] for m in resp.json()["data"]}
         assert "claude-opus-4-6" in ids
         assert "claude-sonnet-4-5-20250929" in ids
         assert "claude-haiku-4-5-20251001" in ids
 
+    def test_openai_aliases_present(self, client):
+        resp = client.get("/v1/models")
+        ids = {m["id"] for m in resp.json()["data"]}
+        assert "gpt-4" in ids
+        assert "gpt-3.5-turbo" in ids
+
 
 # ---------------------------------------------------------------------------
-# Route tests: chat completions (Anthropic backend, mocked)
+# Auth middleware tests
 # ---------------------------------------------------------------------------
 
 
-def _make_anthropic_response(text: str = "Hello!", stop_reason: str = "end_turn"):
-    """Build a mock Anthropic Messages response."""
+class TestAuthMiddleware:
+    def test_no_auth_required_when_key_unset(self, client):
+        resp = client.get("/v1/models")
+        assert resp.status_code == 200
+
+    def test_health_always_accessible(self):
+        with patch.object(openai_proxy, "API_KEY", "secret123"):
+            c = TestClient(app)
+            resp = c.get("/health")
+            assert resp.status_code == 200
+
+    def test_rejects_missing_key(self):
+        with patch.object(openai_proxy, "API_KEY", "secret123"):
+            c = TestClient(app)
+            resp = c.get("/v1/models")
+            assert resp.status_code == 401
+
+    def test_rejects_wrong_key(self):
+        with patch.object(openai_proxy, "API_KEY", "secret123"):
+            c = TestClient(app)
+            resp = c.get(
+                "/v1/models",
+                headers={"Authorization": "Bearer wrongkey"},
+            )
+            assert resp.status_code == 401
+
+    def test_accepts_correct_key(self):
+        with patch.object(openai_proxy, "API_KEY", "secret123"):
+            c = TestClient(app)
+            resp = c.get(
+                "/v1/models",
+                headers={"Authorization": "Bearer secret123"},
+            )
+            assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Anthropic backend: non-streaming (mocked)
+# ---------------------------------------------------------------------------
+
+
+def _mock_response(
+    text: str = "Hello!",
+    stop_reason: str = "end_turn",
+    input_tokens: int = 10,
+    output_tokens: int = 5,
+):
     block = SimpleNamespace(type="text", text=text)
-    usage = SimpleNamespace(input_tokens=10, output_tokens=5)
+    usage = SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens)
     return SimpleNamespace(content=[block], stop_reason=stop_reason, usage=usage)
 
 
-class TestChatCompletionsNonStreaming:
+class TestAnthropicNonStreaming:
     @patch.object(openai_proxy, "BACKEND", "anthropic")
     @patch.object(openai_proxy, "_get_anthropic_client")
     def test_basic_completion(self, mock_get_client, client):
         mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response("Hi there!")
-        )
+        mock_client.messages.create = AsyncMock(return_value=_mock_response("Hi!"))
         mock_get_client.return_value = mock_client
 
         resp = client.post("/v1/chat/completions", json={
@@ -301,8 +586,7 @@ class TestChatCompletionsNonStreaming:
         assert resp.status_code == 200
         data = resp.json()
         assert data["object"] == "chat.completion"
-        assert data["choices"][0]["message"]["role"] == "assistant"
-        assert data["choices"][0]["message"]["content"] == "Hi there!"
+        assert data["choices"][0]["message"]["content"] == "Hi!"
         assert data["choices"][0]["finish_reason"] == "stop"
         assert data["id"].startswith("chatcmpl-")
 
@@ -310,9 +594,7 @@ class TestChatCompletionsNonStreaming:
     @patch.object(openai_proxy, "_get_anthropic_client")
     def test_usage_included(self, mock_get_client, client):
         mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
         mock_get_client.return_value = mock_client
 
         resp = client.post("/v1/chat/completions", json={
@@ -321,17 +603,13 @@ class TestChatCompletionsNonStreaming:
         })
 
         usage = resp.json()["usage"]
-        assert usage["prompt_tokens"] == 10
-        assert usage["completion_tokens"] == 5
-        assert usage["total_tokens"] == 15
+        assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
 
     @patch.object(openai_proxy, "BACKEND", "anthropic")
     @patch.object(openai_proxy, "_get_anthropic_client")
     def test_system_message_forwarded(self, mock_get_client, client):
         mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
         mock_get_client.return_value = mock_client
 
         client.post("/v1/chat/completions", json={
@@ -349,9 +627,7 @@ class TestChatCompletionsNonStreaming:
     @patch.object(openai_proxy, "_get_anthropic_client")
     def test_temperature_forwarded(self, mock_get_client, client):
         mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
         mock_get_client.return_value = mock_client
 
         client.post("/v1/chat/completions", json={
@@ -365,11 +641,41 @@ class TestChatCompletionsNonStreaming:
 
     @patch.object(openai_proxy, "BACKEND", "anthropic")
     @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_top_p_forwarded(self, mock_get_client, client):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
+        mock_get_client.return_value = mock_client
+
+        client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "top_p": 0.9,
+        })
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["top_p"] == 0.9
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_stop_sequences_forwarded(self, mock_get_client, client):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
+        mock_get_client.return_value = mock_client
+
+        client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stop": ["END"],
+        })
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["stop_sequences"] == ["END"]
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
     def test_default_max_tokens(self, mock_get_client, client):
         mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
         mock_get_client.return_value = mock_client
 
         client.post("/v1/chat/completions", json={
@@ -384,9 +690,7 @@ class TestChatCompletionsNonStreaming:
     @patch.object(openai_proxy, "_get_anthropic_client")
     def test_custom_max_tokens(self, mock_get_client, client):
         mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
         mock_get_client.return_value = mock_client
 
         client.post("/v1/chat/completions", json={
@@ -402,9 +706,7 @@ class TestChatCompletionsNonStreaming:
     @patch.object(openai_proxy, "_get_anthropic_client")
     def test_model_name_mapping(self, mock_get_client, client):
         mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
         mock_get_client.return_value = mock_client
 
         resp = client.post("/v1/chat/completions", json={
@@ -421,7 +723,7 @@ class TestChatCompletionsNonStreaming:
     def test_max_tokens_stop_reason(self, mock_get_client, client):
         mock_client = MagicMock()
         mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response("truncated", stop_reason="max_tokens")
+            return_value=_mock_response("truncated", stop_reason="max_tokens")
         )
         mock_get_client.return_value = mock_client
 
@@ -432,24 +734,109 @@ class TestChatCompletionsNonStreaming:
 
         assert resp.json()["choices"][0]["finish_reason"] == "length"
 
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_multi_block_response(self, mock_get_client, client):
+        """Multiple text blocks are concatenated."""
+        b1 = SimpleNamespace(type="text", text="Hello ")
+        b2 = SimpleNamespace(type="text", text="world!")
+        b3 = SimpleNamespace(type="tool_use", id="x", name="t", input={})
+        usage = SimpleNamespace(input_tokens=5, output_tokens=3)
+        response = SimpleNamespace(
+            content=[b1, b2, b3], stop_reason="end_turn", usage=usage
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=response)
+        mock_get_client.return_value = mock_client
+
+        resp = client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+        })
+
+        assert resp.json()["choices"][0]["message"]["content"] == "Hello world!"
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_no_model_field_uses_default(self, mock_get_client, client):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
+        mock_get_client.return_value = mock_client
+
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "Hi"}],
+        })
+
+        assert resp.status_code == 200
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["model"] == openai_proxy.DEFAULT_MODEL
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_empty_messages_handled(self, mock_get_client, client):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
+        mock_get_client.return_value = mock_client
+
+        resp = client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [],
+        })
+
+        assert resp.status_code == 200
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert len(call_kwargs["messages"]) >= 1
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_no_system_kwarg_when_no_system_message(self, mock_get_client, client):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
+        mock_get_client.return_value = mock_client
+
+        client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+        })
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert "system" not in call_kwargs
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_no_temperature_kwarg_when_not_set(self, mock_get_client, client):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
+        mock_get_client.return_value = mock_client
+
+        client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+        })
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert "temperature" not in call_kwargs
+
 
 # ---------------------------------------------------------------------------
-# Route tests: chat completions streaming (Anthropic backend, mocked)
+# Anthropic backend: streaming (mocked)
 # ---------------------------------------------------------------------------
 
 
-class TestChatCompletionsStreaming:
+class TestAnthropicStreaming:
     @patch.object(openai_proxy, "BACKEND", "anthropic")
     @patch.object(openai_proxy, "_get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_streaming_response(self, mock_get_client, async_client):
-        # Build a mock async stream context manager
+    async def test_streaming_chunks_and_done(self, mock_get_client, async_client):
         async def mock_text_stream():
-            for chunk in ["Hello", " ", "world"]:
+            for chunk in ["Hello", " world"]:
                 yield chunk
+
+        final_msg = _mock_response("Hello world", input_tokens=8, output_tokens=4)
 
         mock_stream = MagicMock()
         mock_stream.text_stream = mock_text_stream()
+        mock_stream.get_final_message = AsyncMock(return_value=final_msg)
 
         mock_stream_cm = AsyncMock()
         mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_stream)
@@ -471,30 +858,74 @@ class TestChatCompletionsStreaming:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers.get("content-type", "")
 
-        # Parse SSE events
-        body = resp.text
         data_lines = [
             line.removeprefix("data: ")
-            for line in body.splitlines()
+            for line in resp.text.splitlines()
             if line.startswith("data: ")
         ]
 
-        # Should have content chunks + final + [DONE]
-        assert len(data_lines) >= 2
         assert data_lines[-1] == "[DONE]"
 
-        # Check a content chunk
-        first_chunk = json.loads(data_lines[0])
-        assert first_chunk["object"] == "chat.completion.chunk"
-        assert "delta" in first_chunk["choices"][0]
+        # Content chunks
+        content_chunks = []
+        for dl in data_lines:
+            if dl == "[DONE]":
+                break
+            parsed = json.loads(dl)
+            c = parsed["choices"][0]["delta"].get("content")
+            if c:
+                content_chunks.append(c)
+        assert "Hello" in content_chunks
+        assert " world" in content_chunks
 
-        # Check final chunk has finish_reason
+        # Final chunk has finish_reason and usage from get_final_message()
         final_chunk = json.loads(data_lines[-2])
         assert final_chunk["choices"][0]["finish_reason"] == "stop"
+        assert final_chunk["usage"]["prompt_tokens"] == 8
+        assert final_chunk["usage"]["completion_tokens"] == 4
+        assert final_chunk["usage"]["total_tokens"] == 12
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    @pytest.mark.asyncio
+    async def test_streaming_stop_reason_from_final_message(self, mock_get_client, async_client):
+        async def mock_text_stream():
+            yield "partial"
+
+        final_msg = _mock_response("partial", stop_reason="max_tokens")
+        mock_stream = MagicMock()
+        mock_stream.text_stream = mock_text_stream()
+        mock_stream.get_final_message = AsyncMock(return_value=final_msg)
+
+        mock_stream_cm = AsyncMock()
+        mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_stream)
+        mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = MagicMock()
+        mock_client.messages.stream = MagicMock(return_value=mock_stream_cm)
+        mock_get_client.return_value = mock_client
+
+        resp = await async_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "claude-sonnet-4-5-20250929",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        )
+
+        data_lines = [
+            line.removeprefix("data: ")
+            for line in resp.text.splitlines()
+            if line.startswith("data: ")
+        ]
+
+        final_chunk = json.loads(data_lines[-2])
+        assert final_chunk["choices"][0]["finish_reason"] == "length"
 
 
 # ---------------------------------------------------------------------------
-# Route tests: error handling
+# Error handling
 # ---------------------------------------------------------------------------
 
 
@@ -537,10 +968,37 @@ class TestErrorHandling:
 
     @patch.object(openai_proxy, "BACKEND", "anthropic")
     @patch.object(openai_proxy, "_get_anthropic_client")
-    def test_generic_exception(self, mock_get_client, client):
+    def test_rate_limit_error(self, mock_get_client, client):
+        import httpx
+
         mock_client = MagicMock()
         mock_client.messages.create = AsyncMock(
-            side_effect=RuntimeError("something broke")
+            side_effect=openai_proxy.anthropic.RateLimitError(
+                message="Rate limited",
+                response=httpx.Response(
+                    status_code=429,
+                    request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+                ),
+                body=None,
+            )
+        )
+        mock_get_client.return_value = mock_client
+
+        resp = client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+        })
+
+        assert resp.status_code == 429
+        assert resp.json()["error"]["type"] == "rate_limit_error"
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_generic_exception_no_leak(self, mock_get_client, client):
+        """Internal errors should not leak exception details."""
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(
+            side_effect=RuntimeError("secret internal path /etc/foo")
         )
         mock_get_client.return_value = mock_client
 
@@ -551,15 +1009,17 @@ class TestErrorHandling:
 
         assert resp.status_code == 500
         assert resp.json()["error"]["type"] == "server_error"
-        assert "something broke" in resp.json()["error"]["message"]
+        # Should NOT contain the internal error details
+        assert "secret internal path" not in resp.json()["error"]["message"]
+        assert resp.json()["error"]["message"] == "Internal server error"
 
 
 # ---------------------------------------------------------------------------
-# Route tests: CLI backend (mocked subprocess)
+# CLI backend: non-streaming (mocked)
 # ---------------------------------------------------------------------------
 
 
-class TestCLIBackendNonStreaming:
+class TestCLINonStreaming:
     @patch.object(openai_proxy, "BACKEND", "cli")
     @patch("openai_proxy.asyncio.create_subprocess_exec")
     def test_cli_success(self, mock_exec, client):
@@ -567,7 +1027,12 @@ class TestCLIBackendNonStreaming:
         mock_proc.returncode = 0
         mock_proc.communicate = AsyncMock(
             return_value=(
-                json.dumps({"result": "Hello from CLI!"}).encode(),
+                json.dumps({
+                    "result": "Hello from CLI!",
+                    "session_id": "sess-123",
+                    "num_input_tokens": 10,
+                    "num_output_tokens": 8,
+                }).encode(),
                 b"",
             )
         )
@@ -581,7 +1046,11 @@ class TestCLIBackendNonStreaming:
         assert resp.status_code == 200
         data = resp.json()
         assert data["choices"][0]["message"]["content"] == "Hello from CLI!"
-        assert data["usage"]["prompt_tokens"] == 0
+        assert data["usage"]["prompt_tokens"] == 10
+        assert data["usage"]["completion_tokens"] == 8
+        assert data["usage"]["total_tokens"] == 18
+        assert data["id"] == "chatcmpl-sess-123"
+        assert resp.headers.get("x-session-id") == "sess-123"
 
     @patch.object(openai_proxy, "BACKEND", "cli")
     @patch("openai_proxy.asyncio.create_subprocess_exec")
@@ -629,41 +1098,105 @@ class TestCLIBackendNonStreaming:
         )
         mock_exec.return_value = mock_proc
 
-        with patch.dict("os.environ", {"CLAUDECODE": "1", "HOME": "/home/test"}, clear=False):
+        with patch.dict("os.environ", {"CLAUDECODE": "1"}, clear=False):
             client.post("/v1/chat/completions", json={
                 "model": "claude-sonnet-4-5-20250929",
                 "messages": [{"role": "user", "content": "Hi"}],
             })
 
-        call_kwargs = mock_exec.call_args
-        env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+        env = mock_exec.call_args.kwargs.get("env") or mock_exec.call_args[1].get("env")
         assert "CLAUDECODE" not in env
 
+    @patch.object(openai_proxy, "BACKEND", "cli")
+    @patch("openai_proxy.asyncio.create_subprocess_exec", side_effect=FileNotFoundError("No such file"))
+    def test_cli_not_found(self, mock_exec, client):
+        resp = client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+        })
 
-class TestCLIBackendStreaming:
+        assert resp.status_code == 500
+        assert resp.json()["error"]["type"] == "configuration_error"
+
+    @patch.object(openai_proxy, "BACKEND", "cli")
+    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    def test_cli_session_id_header(self, mock_exec, client):
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(
+            return_value=(json.dumps({"result": "ok"}).encode(), b"")
+        )
+        mock_exec.return_value = mock_proc
+
+        client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "claude-sonnet-4-5-20250929",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+            headers={"x-session-id": "my-session"},
+        )
+
+        cmd_list = list(mock_exec.call_args[0])
+        assert "--session-id" in cmd_list
+        idx = cmd_list.index("--session-id")
+        assert cmd_list[idx + 1] == "my-session"
+
+    @patch.object(openai_proxy, "BACKEND", "cli")
+    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    def test_cli_system_prompt_forwarded(self, mock_exec, client):
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(
+            return_value=(json.dumps({"result": "ok"}).encode(), b"")
+        )
+        mock_exec.return_value = mock_proc
+
+        client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [
+                {"role": "system", "content": "You are a pirate"},
+                {"role": "user", "content": "Hello"},
+            ],
+        })
+
+        cmd_list = list(mock_exec.call_args[0])
+        assert "--append-system-prompt" in cmd_list
+        idx = cmd_list.index("--append-system-prompt")
+        assert cmd_list[idx + 1] == "You are a pirate"
+
+    @patch.object(openai_proxy, "BACKEND", "cli")
+    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    def test_cli_max_tokens_forwarded(self, mock_exec, client):
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(
+            return_value=(json.dumps({"result": "ok"}).encode(), b"")
+        )
+        mock_exec.return_value = mock_proc
+
+        client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 256,
+        })
+
+        cmd_list = list(mock_exec.call_args[0])
+        assert "--max-tokens" in cmd_list
+        idx = cmd_list.index("--max-tokens")
+        assert cmd_list[idx + 1] == "256"
+
+
+# ---------------------------------------------------------------------------
+# CLI backend: streaming (mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestCLIStreaming:
     @patch.object(openai_proxy, "BACKEND", "cli")
     @patch("openai_proxy.asyncio.create_subprocess_exec")
     @pytest.mark.asyncio
     async def test_cli_streaming(self, mock_exec, async_client):
-        lines = [
-            json.dumps({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hello"}}) + "\n",
-            json.dumps({"type": "content_block_delta", "delta": {"type": "text_delta", "text": " world"}}) + "\n",
-        ]
-
-        async def fake_readline():
-            if lines:
-                return lines.pop(0).encode()
-            return b""
-
-        mock_stdout = MagicMock()
-        mock_stdout.__aiter__ = lambda self: self
-        _lines = iter([
-            json.dumps({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hello"}}).encode() + b"\n",
-            json.dumps({"type": "content_block_delta", "delta": {"type": "text_delta", "text": " world"}}).encode() + b"\n",
-        ])
-        mock_stdout.__anext__ = AsyncMock(side_effect=lambda: next(_lines, StopAsyncIteration()))
-
-        # Need proper async iteration
         async def aiter_lines():
             yield json.dumps({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hello"}}).encode() + b"\n"
             yield json.dumps({"type": "content_block_delta", "delta": {"type": "text_delta", "text": " world"}}).encode() + b"\n"
@@ -694,7 +1227,6 @@ class TestCLIBackendStreaming:
 
         assert data_lines[-1] == "[DONE]"
 
-        # Check content was streamed
         content_chunks = []
         for dl in data_lines:
             if dl == "[DONE]":
@@ -709,15 +1241,15 @@ class TestCLIBackendStreaming:
     @patch.object(openai_proxy, "BACKEND", "cli")
     @patch("openai_proxy.asyncio.create_subprocess_exec")
     @pytest.mark.asyncio
-    async def test_cli_streaming_result_event(self, mock_exec, async_client):
-        """Test that 'result' type events from CLI are captured."""
+    async def test_cli_streaming_assistant_event(self, mock_exec, async_client):
         async def aiter_lines():
-            yield json.dumps({"type": "result", "result": "Final answer"}).encode() + b"\n"
+            yield json.dumps({"type": "assistant", "message": "Hi there"}).encode() + b"\n"
 
         mock_proc = MagicMock()
         mock_proc.stdout = aiter_lines()
         mock_proc.stderr = AsyncMock()
         mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0
         mock_exec.return_value = mock_proc
 
         resp = await async_client.post(
@@ -735,112 +1267,76 @@ class TestCLIBackendStreaming:
             if line.startswith("data: ")
         ]
 
-        content_chunks = []
+        content_found = False
         for dl in data_lines:
             if dl == "[DONE]":
                 break
             parsed = json.loads(dl)
-            c = parsed["choices"][0]["delta"].get("content")
-            if c:
-                content_chunks.append(c)
-        assert "Final answer" in content_chunks
+            c = parsed["choices"][0]["delta"].get("content", "")
+            if "Hi there" in c:
+                content_found = True
+        assert content_found
+
+    @patch.object(openai_proxy, "BACKEND", "cli")
+    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @pytest.mark.asyncio
+    async def test_cli_streaming_session_id_from_system_event(self, mock_exec, async_client):
+        async def aiter_lines():
+            yield json.dumps({"type": "system", "session_id": "stream-sess-1"}).encode() + b"\n"
+            yield json.dumps({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hi"}}).encode() + b"\n"
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = aiter_lines()
+        mock_proc.stderr = AsyncMock()
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0
+        mock_exec.return_value = mock_proc
+
+        resp = await async_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "claude-sonnet-4-5-20250929",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        )
+
+        data_lines = [
+            line.removeprefix("data: ")
+            for line in resp.text.splitlines()
+            if line.startswith("data: ")
+        ]
+
+        # Content chunk should use session-based ID
+        for dl in data_lines:
+            if dl == "[DONE]":
+                continue
+            parsed = json.loads(dl)
+            if parsed["choices"][0]["delta"].get("content"):
+                assert parsed["id"] == "chatcmpl-stream-sess-1"
+                break
 
 
 # ---------------------------------------------------------------------------
-# Edge case / integration-level tests
+# Singleton tests
 # ---------------------------------------------------------------------------
 
 
-class TestEdgeCases:
-    @patch.object(openai_proxy, "BACKEND", "anthropic")
-    @patch.object(openai_proxy, "_get_anthropic_client")
-    def test_no_model_field_uses_default(self, mock_get_client, client):
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
-        mock_get_client.return_value = mock_client
+class TestSingletonClient:
+    def test_anthropic_client_reused(self):
+        with patch("openai_proxy.anthropic.AsyncAnthropic") as MockClass:
+            mock_instance = MagicMock()
+            MockClass.return_value = mock_instance
 
-        resp = client.post("/v1/chat/completions", json={
-            "messages": [{"role": "user", "content": "Hi"}],
-        })
+            c1 = openai_proxy._get_anthropic_client()
+            c2 = openai_proxy._get_anthropic_client()
 
-        assert resp.status_code == 200
-        call_kwargs = mock_client.messages.create.call_args[1]
-        assert call_kwargs["model"] == openai_proxy.DEFAULT_MODEL
+            assert c1 is c2
+            MockClass.assert_called_once()
 
-    @patch.object(openai_proxy, "BACKEND", "anthropic")
-    @patch.object(openai_proxy, "_get_anthropic_client")
-    def test_empty_messages_handled(self, mock_get_client, client):
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
-        mock_get_client.return_value = mock_client
-
-        resp = client.post("/v1/chat/completions", json={
-            "model": "claude-sonnet-4-5-20250929",
-            "messages": [],
-        })
-
-        assert resp.status_code == 200
-        call_kwargs = mock_client.messages.create.call_args[1]
-        assert len(call_kwargs["messages"]) >= 1
-
-    @patch.object(openai_proxy, "BACKEND", "anthropic")
-    @patch.object(openai_proxy, "_get_anthropic_client")
-    def test_no_system_kwarg_when_no_system_message(self, mock_get_client, client):
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
-        mock_get_client.return_value = mock_client
-
-        client.post("/v1/chat/completions", json={
-            "model": "claude-sonnet-4-5-20250929",
-            "messages": [{"role": "user", "content": "Hi"}],
-        })
-
-        call_kwargs = mock_client.messages.create.call_args[1]
-        assert "system" not in call_kwargs
-
-    @patch.object(openai_proxy, "BACKEND", "anthropic")
-    @patch.object(openai_proxy, "_get_anthropic_client")
-    def test_no_temperature_kwarg_when_not_set(self, mock_get_client, client):
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=_make_anthropic_response()
-        )
-        mock_get_client.return_value = mock_client
-
-        client.post("/v1/chat/completions", json={
-            "model": "claude-sonnet-4-5-20250929",
-            "messages": [{"role": "user", "content": "Hi"}],
-        })
-
-        call_kwargs = mock_client.messages.create.call_args[1]
-        assert "temperature" not in call_kwargs
-
-    @patch.object(openai_proxy, "BACKEND", "anthropic")
-    @patch.object(openai_proxy, "_get_anthropic_client")
-    def test_multi_block_response(self, mock_get_client, client):
-        """Test that multiple text blocks are concatenated."""
-        block1 = SimpleNamespace(type="text", text="Hello ")
-        block2 = SimpleNamespace(type="text", text="world!")
-        block3 = SimpleNamespace(type="tool_use", id="x", name="t", input={})
-        usage = SimpleNamespace(input_tokens=5, output_tokens=3)
-        response = SimpleNamespace(
-            content=[block1, block2, block3],
-            stop_reason="end_turn",
-            usage=usage,
-        )
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
-
-        resp = client.post("/v1/chat/completions", json={
-            "model": "claude-sonnet-4-5-20250929",
-            "messages": [{"role": "user", "content": "Hi"}],
-        })
-
-        assert resp.json()["choices"][0]["message"]["content"] == "Hello world!"
+    def test_cli_env_not_cached(self):
+        """_get_cli_env computes fresh each call (no stale cache)."""
+        e1 = openai_proxy._get_cli_env()
+        e2 = openai_proxy._get_cli_env()
+        assert e1 is not e2
+        assert e1 == e2
