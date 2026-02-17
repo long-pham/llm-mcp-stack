@@ -102,29 +102,6 @@ class TestCrawl4AI:
             )
 
 
-class TestDuckDuckGoMCP:
-    """Tests for DuckDuckGo MCP service."""
-
-    base_url = f"http://{BASE_HOST}:38020"
-
-    def test_health_endpoint(self):
-        """Test DuckDuckGo MCP health endpoint."""
-        with httpx.Client(timeout=TIMEOUT) as client:
-            response = client.get(f"{self.base_url}/healthz")
-            assert response.status_code == 200, (
-                f"DuckDuckGo MCP health check failed: {response.status_code}"
-            )
-
-    def test_mcp_endpoint_exists(self):
-        """Test MCP endpoint exists (405 = needs POST)."""
-        with httpx.Client(timeout=TIMEOUT) as client:
-            response = client.get(f"{self.base_url}/mcp")
-            # 405 Method Not Allowed means endpoint exists
-            assert response.status_code in [200, 400, 405], (
-                f"DuckDuckGo MCP endpoint not found: {response.status_code}"
-            )
-
-
 class TestMetaMCP:
     """Tests for MetaMCP aggregator/gateway."""
 
@@ -169,7 +146,6 @@ class TestConnectivity:
             ("SearXNG", f"http://{BASE_HOST}:38080/healthz"),
             ("SearXNG-MCP", f"http://{BASE_HOST}:38081/health"),
             ("Crawl4AI", f"http://{BASE_HOST}:11235/health"),
-            ("DuckDuckGo-MCP", f"http://{BASE_HOST}:38020/healthz"),
             ("MetaMCP", f"http://{BASE_HOST}:12008/health"),
         ]
 
@@ -266,24 +242,6 @@ class TestMCPProtocol:
             if response.status_code == 200:
                 print(f"Response: {response.text[:200]}")
 
-    def test_duckduckgo_mcp_protocol(self):
-        """Test DuckDuckGo MCP responds to protocol requests."""
-        with httpx.Client(timeout=TIMEOUT) as client:
-            # Test MCP endpoint with POST
-            response = client.post(
-                f"http://{BASE_HOST}:38020/mcp",
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "tools/list",
-                    "params": {},
-                    "id": 1,
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            print(f"\nDuckDuckGo MCP: {response.status_code}")
-            if response.status_code == 200:
-                print(f"Response: {response.text[:300]}")
-
     def test_crawl4ai_mcp_endpoint(self):
         """Test Crawl4AI MCP endpoint."""
         with httpx.Client(timeout=TIMEOUT) as client:
@@ -304,7 +262,6 @@ def main():
         ("SearXNG", f"http://{BASE_HOST}:38080", "/healthz"),
         ("SearXNG-MCP", f"http://{BASE_HOST}:38081", "/health"),
         ("Crawl4AI", f"http://{BASE_HOST}:11235", "/health"),
-        ("DuckDuckGo-MCP", f"http://{BASE_HOST}:38020", "/healthz"),
         ("MetaMCP", f"http://{BASE_HOST}:12008", "/health"),
     ]
 

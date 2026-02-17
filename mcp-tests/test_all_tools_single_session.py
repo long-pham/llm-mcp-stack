@@ -34,11 +34,6 @@ ALL_TOOLS = [
     # SearXNG tools
     ("SearXNG__searxng_web_search", {"query": "test"}),
     ("SearXNG__web_url_read", {"url": "https://example.com", "maxLength": 500}),
-    # DuckDuckGo tools
-    ("DuckDuckGo__web-search", {"query": "test", "numResults": 2}),
-    ("DuckDuckGo__iask-search", {"query": "hello"}),
-    ("DuckDuckGo__brave-search", {"query": "test"}),
-    ("DuckDuckGo__monica-search", {"query": "hi"}),
 ]
 
 

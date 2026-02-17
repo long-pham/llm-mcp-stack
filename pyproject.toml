@@ -1,7 +1,7 @@
 [project]
 name = "llm-mcp-stack"
 version = "0.1.0"
-description = "Add your description here"
+description = "Docker Compose stack for MCP services with an OpenAI-compatible Claude proxy"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -25,7 +25,7 @@ METAMCP_URL = os.getenv("METAMCP_URL", "http://opidev.local:12008/metamcp/genera
 FAST_TOOLS = [
     ("crawl4ai__md", {"url": "https://example.com"}),
     ("crawl4ai__crawl", {"urls": ["https://example.com"]}),
-    ("DuckDuckGo__brave-search", {"query": "test"}),
+    ("SearXNG__searxng_web_search", {"query": "test"}),
 ]
 
 

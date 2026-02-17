@@ -40,12 +40,6 @@ MCP_SERVERS = {
         "health_url": f"http://{BASE_HOST}:38081/health",
         "transport": "sse",
     },
-    "duckduckgo-mcp": {
-        "sse_url": f"http://{BASE_HOST}:38020/sse",
-        "mcp_url": f"http://{BASE_HOST}:38020/mcp",
-        "health_url": f"http://{BASE_HOST}:38020/healthz",
-        "transport": "sse",
-    },
     "metamcp": {
         "sse_url": f"http://{BASE_HOST}:12008/sse",
         "mcp_url": METAMCP_URL,
@@ -119,21 +113,6 @@ class TestMCPServerDiscovery:
                 assert len(tool_names) > 0, "Expected at least one tool"
         except Exception as e:
             pytest.skip(f"Could not connect to SearXNG MCP: {e}")
-
-    async def test_duckduckgo_mcp_list_tools(self):
-        """Test listing tools from DuckDuckGo MCP server."""
-        if not await check_health("duckduckgo-mcp"):
-            pytest.skip("DuckDuckGo MCP server not healthy")
-
-        try:
-            async with mcp_session("duckduckgo-mcp") as session:
-                tools = await session.list_tools()
-                assert tools.tools is not None
-                tool_names = [t.name for t in tools.tools]
-                print(f"\nDuckDuckGo MCP tools: {tool_names}")
-                assert len(tool_names) > 0, "Expected at least one tool"
-        except Exception as e:
-            pytest.skip(f"Could not connect to DuckDuckGo MCP: {e}")
 
     async def test_metamcp_list_tools(self):
         """Test listing tools from MetaMCP aggregator."""
@@ -288,47 +267,6 @@ class TestSearXNGTools:
                 assert result.content is not None
         except Exception as e:
             pytest.skip(f"SearXNG search tool test failed: {e}")
-
-
-class TestDuckDuckGoTools:
-    """Test DuckDuckGo MCP tools."""
-
-    async def test_duckduckgo_search_tool(self):
-        """Test DuckDuckGo search tool via MCP."""
-        if not await check_health("duckduckgo-mcp"):
-            pytest.skip("DuckDuckGo MCP server not healthy")
-
-        try:
-            async with mcp_session("duckduckgo-mcp") as session:
-                tools = await session.list_tools()
-                tool_names = [t.name for t in tools.tools]
-                print(f"\nDuckDuckGo tools: {tool_names}")
-
-                # Find search tool
-                search_tool = None
-                for name in ["search", "duckduckgo_search", "ddg_search", "web_search"]:
-                    if name in tool_names:
-                        search_tool = name
-                        break
-
-                if not search_tool:
-                    for name in tool_names:
-                        if "search" in name.lower():
-                            search_tool = name
-                            break
-
-                if not search_tool:
-                    pytest.skip(f"No search tool found in: {tool_names}")
-
-                # Call the search tool
-                result = await session.call_tool(
-                    search_tool,
-                    arguments={"query": "artificial intelligence"}
-                )
-                assert result is not None
-                print(f"\nDuckDuckGo search result type: {type(result)}")
-        except Exception as e:
-            pytest.skip(f"DuckDuckGo search tool test failed: {e}")
 
 
 class TestMetaMCPAggregation:

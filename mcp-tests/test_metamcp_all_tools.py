@@ -6,7 +6,7 @@ Tests all 13 tools available through MetaMCP aggregator.
 Usage:
     uv run pytest test_metamcp_all_tools.py -v
     uv run pytest test_metamcp_all_tools.py -v -k crawl4ai
-    uv run pytest test_metamcp_all_tools.py -v -k duckduckgo
+    uv run pytest test_metamcp_all_tools.py -v -k searxng
 """
 
 import asyncio
@@ -182,65 +182,6 @@ class TestSearXNGTools:
             )
             assert result.content is not None
             print(f"\nSearXNG__web_url_read: {len(result.content)} items")
-
-
-class TestDuckDuckGoTools:
-    """Test DuckDuckGo tools."""
-
-    async def test_duckduckgo_web_search(self):
-        """DuckDuckGo__web-search - Basic web search."""
-        if not await check_health():
-            pytest.skip("MetaMCP not healthy")
-
-        async with metamcp_session() as session:
-            result = await asyncio.wait_for(
-                session.call_tool(
-                    "DuckDuckGo__web-search",
-                    arguments={"query": "test", "numResults": 2}
-                ),
-                timeout=TOOL_TIMEOUT
-            )
-            assert result.content is not None
-            print(f"\nDuckDuckGo__web-search: {len(result.content)} items")
-
-    async def test_duckduckgo_iask_search(self):
-        """DuckDuckGo__iask-search - AI-powered search via iAsk."""
-        if not await check_health():
-            pytest.skip("MetaMCP not healthy")
-
-        async with metamcp_session() as session:
-            result = await asyncio.wait_for(
-                session.call_tool("DuckDuckGo__iask-search", arguments={"query": "hello"}),
-                timeout=TOOL_TIMEOUT
-            )
-            assert result.content is not None
-            print(f"\nDuckDuckGo__iask-search: {len(result.content)} items")
-
-    async def test_duckduckgo_brave_search(self):
-        """DuckDuckGo__brave-search - Brave AI search."""
-        if not await check_health():
-            pytest.skip("MetaMCP not healthy")
-
-        async with metamcp_session() as session:
-            result = await asyncio.wait_for(
-                session.call_tool("DuckDuckGo__brave-search", arguments={"query": "test"}),
-                timeout=TOOL_TIMEOUT
-            )
-            assert result.content is not None
-            print(f"\nDuckDuckGo__brave-search: {len(result.content)} items")
-
-    async def test_duckduckgo_monica_search(self):
-        """DuckDuckGo__monica-search - Monica AI search."""
-        if not await check_health():
-            pytest.skip("MetaMCP not healthy")
-
-        async with metamcp_session() as session:
-            result = await asyncio.wait_for(
-                session.call_tool("DuckDuckGo__monica-search", arguments={"query": "hi"}),
-                timeout=TOOL_TIMEOUT
-            )
-            assert result.content is not None
-            print(f"\nDuckDuckGo__monica-search: {len(result.content)} items")
 
 
 class TestToolDiscovery:
