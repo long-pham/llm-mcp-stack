@@ -167,7 +167,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def check_auth(request: Request, call_next):
-    if API_KEY and request.url.path not in ("/health",):
+    if API_KEY and request.url.path.rstrip("/") not in ("/health",):
         auth = request.headers.get("authorization", "")
         if auth != f"Bearer {API_KEY}":
             return _openai_error(
@@ -239,7 +239,7 @@ def _flatten_content(content: Any) -> str:
             elif isinstance(part, str):
                 parts.append(part)
         return "\n".join(parts)
-    return str(content) if content is not None else ""
+    return ""
 
 def _extract_system_prompt(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
     """Extracts the system prompt and returns the remaining messages."""
@@ -285,6 +285,27 @@ def _translate_messages(
         converted.append({"role": "user", "content": "(empty)"})
 
     return system_prompt, converted
+
+
+def _validate_chat_body(body: Any) -> str | None:
+    """Validate the minimal structure required for chat completions."""
+    if not isinstance(body, dict):
+        return "Request body must be a JSON object"
+
+    messages = body.get("messages")
+    if messages is None:
+        return None
+    if not isinstance(messages, list):
+        return "Invalid 'messages': expected an array of message objects"
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            return f"Invalid message at index {i}: expected an object"
+
+    max_tokens = body.get("max_tokens")
+    if max_tokens is not None and (not isinstance(max_tokens, (int, float)) or max_tokens < 1):
+        return "'max_tokens' must be an integer >= 1"
+
+    return None
 
 
 def _build_anthropic_kwargs(body: dict[str, Any]) -> dict[str, Any]:
@@ -453,15 +474,18 @@ def _get_cli_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
 
-def _messages_to_prompt_string(messages: list[dict[str, Any]]) -> str:
+def _messages_to_prompt_string(
+    messages: list[dict[str, Any]], *, include_system: bool = True
+) -> str:
     """Flatten OpenAI-format messages into a single prompt string for the CLI."""
     parts: list[str] = []
     for msg in messages:
         role = msg.get("role", "user")
         content = _flatten_content(msg.get("content", ""))
-        
+
         if role == "system":
-            parts.append(f"[System]: {content}")
+            if include_system:
+                parts.append(f"[System]: {content}")
         elif role == "assistant":
             parts.append(f"[Assistant]: {content}")
         else:
@@ -529,7 +553,7 @@ async def _cli_chat(
     """Non-streaming chat completion via Claude Code CLI."""
     model = _resolve_model(body.get("model"))
     messages = body.get("messages", [])
-    prompt = _messages_to_prompt_string(messages)
+    prompt = _messages_to_prompt_string(messages, include_system=False)
     system_prompt, _ = _extract_system_prompt(messages)
 
     max_tokens = body.get("max_tokens")
@@ -623,7 +647,7 @@ async def _cli_chat_stream(
     messages = body.get("messages", [])
     comp_id = _completion_id()
     created = _timestamp()
-    prompt = _messages_to_prompt_string(messages)
+    prompt = _messages_to_prompt_string(messages, include_system=False)
     system_prompt, _ = _extract_system_prompt(messages)
 
     max_tokens = body.get("max_tokens")
@@ -755,6 +779,10 @@ async def chat_completions(
         body = await request.json()
     except Exception:
         return _openai_error("Invalid JSON body")
+
+    validation_error = _validate_chat_body(body)
+    if validation_error:
+        return _openai_error(validation_error, status=400, err_type="invalid_request_error")
 
     stream = body.get("stream", False)
 

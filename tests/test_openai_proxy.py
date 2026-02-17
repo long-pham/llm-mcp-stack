@@ -21,6 +21,7 @@ from llm_mcp_stack.openai_proxy import (
     _messages_to_prompt_string,
     _resolve_model,
     _translate_messages,
+    _validate_chat_body,
     app,
 )
 
@@ -334,15 +335,13 @@ class TestBuildAnthropicKwargs:
         kwargs = _build_anthropic_kwargs(body)
         assert kwargs["stop_sequences"] == ["END", "STOP"]
 
-    def test_max_tokens_zero_preserved(self):
-        """max_tokens=0 should not be replaced by the default."""
-        body = {
+    def test_max_tokens_zero_rejected_by_validation(self):
+        """max_tokens=0 is caught by _validate_chat_body before reaching _build_anthropic_kwargs."""
+        assert _validate_chat_body({
             "model": "claude-sonnet-4-5-20250929",
             "messages": [{"role": "user", "content": "Hi"}],
             "max_tokens": 0,
-        }
-        kwargs = _build_anthropic_kwargs(body)
-        assert kwargs["max_tokens"] == 0
+        }) == "'max_tokens' must be an integer >= 1"
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +401,45 @@ class TestMessagesToPromptString:
 
     def test_empty_messages(self):
         assert _messages_to_prompt_string([]) == ""
+
+    def test_system_messages_can_be_excluded(self):
+        result = _messages_to_prompt_string(
+            [
+                {"role": "system", "content": "Be strict"},
+                {"role": "user", "content": "Hello"},
+            ],
+            include_system=False,
+        )
+        assert "[System]:" not in result
+        assert "[User]: Hello" in result
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _validate_chat_body
+# ---------------------------------------------------------------------------
+
+
+class TestValidateChatBody:
+    def test_non_object_is_rejected(self):
+        assert _validate_chat_body("x") == "Request body must be a JSON object"
+
+    def test_messages_not_list_is_rejected(self):
+        assert _validate_chat_body({"messages": "oops"}) == "Invalid 'messages': expected an array of message objects"
+
+    def test_messages_with_non_object_is_rejected(self):
+        assert _validate_chat_body({"messages": ["bad"]}) == "Invalid message at index 0: expected an object"
+
+    def test_missing_messages_is_allowed(self):
+        assert _validate_chat_body({"model": "x"}) is None
+
+    def test_max_tokens_zero_rejected(self):
+        assert _validate_chat_body({"messages": [], "max_tokens": 0}) == "'max_tokens' must be an integer >= 1"
+
+    def test_max_tokens_negative_rejected(self):
+        assert _validate_chat_body({"messages": [], "max_tokens": -5}) == "'max_tokens' must be an integer >= 1"
+
+    def test_max_tokens_valid_allowed(self):
+        assert _validate_chat_body({"messages": [], "max_tokens": 100}) is None
 
 
 # ---------------------------------------------------------------------------
@@ -981,6 +1019,19 @@ class TestErrorHandling:
         )
         assert resp.status_code == 400
         assert resp.json()["error"]["type"] == "invalid_request_error"
+
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_invalid_messages_shape_returns_400(self, mock_get_client, client):
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "claude-sonnet-4-5-20250929",
+                "messages": "oops",
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["type"] == "invalid_request_error"
+        mock_get_client.assert_not_called()
 
     @patch.object(openai_proxy, "BACKEND", "anthropic")
     @patch.object(openai_proxy, "_get_anthropic_client")

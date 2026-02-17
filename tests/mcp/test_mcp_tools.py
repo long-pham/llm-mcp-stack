@@ -25,7 +25,7 @@ from mcp.client.streamable_http import streamable_http_client
 load_dotenv()
 
 # Configuration
-BASE_HOST = os.getenv("MCP_BASE_HOST", "opidev.local")
+BASE_HOST = os.getenv("MCP_BASE_HOST", "localhost")
 TIMEOUT = 30.0
 
 # MetaMCP with Streamable HTTP (from .env)
@@ -126,7 +126,7 @@ class TestMCPServerDiscovery:
                 tool_names = [t.name for t in tools.tools]
                 print(f"\nMetaMCP aggregated tools ({len(tool_names)}): {tool_names[:10]}...")
                 # MetaMCP aggregates tools from multiple servers
-                assert len(tool_names) >= 0
+                assert len(tool_names) > 0, "Expected at least one aggregated tool"
         except Exception as e:
             pytest.skip(f"Could not connect to MetaMCP: {e}")
 

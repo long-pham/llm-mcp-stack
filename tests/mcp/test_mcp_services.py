@@ -22,6 +22,28 @@ BASE_HOST = os.getenv("MCP_BASE_HOST", "localhost")
 TIMEOUT = 10.0
 
 
+def _endpoint_reachable(url: str) -> bool:
+    try:
+        with httpx.Client(timeout=1.5) as client:
+            response = client.get(url)
+            return response.status_code < 500
+    except httpx.RequestError:
+        return False
+
+
+if pytest and not all(
+    [
+        _endpoint_reachable(f"http://{BASE_HOST}:38080/healthz"),
+        _endpoint_reachable(f"http://{BASE_HOST}:38081/health"),
+        _endpoint_reachable(f"http://{BASE_HOST}:11235/health"),
+        _endpoint_reachable(f"http://{BASE_HOST}:12008/health"),
+    ]
+):
+    pytestmark = pytest.mark.skip(
+        reason="MCP integration services are not reachable; start docker compose first"
+    )
+
+
 class TestSearXNG:
     """Tests for SearXNG metasearch engine."""
 

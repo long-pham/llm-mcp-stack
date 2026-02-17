@@ -4,20 +4,46 @@
 # ]
 # ///
 
-import requests
 import json
+import queue
+import sys
 import threading
 import time
-import sys
 import urllib.parse
-import queue
 import uuid
+
+try:
+    import pytest
+except ImportError:
+    pytest = None  # Allow running standalone without pytest
+
+if pytest:
+    requests = pytest.importorskip("requests")
+else:
+    import requests
 
 # Color codes for output
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RED = "\033[91m"
 RESET = "\033[0m"
+
+
+def _endpoint_reachable(url: str) -> bool:
+    try:
+        response = requests.get(url, timeout=1.0)
+        return response.status_code < 500
+    except Exception:
+        return False
+
+
+if pytest and not (
+    _endpoint_reachable("http://localhost:11235/health")
+    and _endpoint_reachable("http://localhost:38081/mcp")
+):
+    pytestmark = pytest.mark.skip(
+        reason="MCP integration services are not reachable; start docker compose first"
+    )
 
 def log(msg, color=RESET):
     print(f"{color}{msg}{RESET}")
@@ -143,7 +169,7 @@ class MCPSSEClient:
                 if response.status_code == 200 and response.text.strip():
                     try:
                         return response.json()
-                    except:
+                    except Exception:
                         pass # Continue to wait for SSE if JSON parse fails
                 
                 # Wait for response in queue

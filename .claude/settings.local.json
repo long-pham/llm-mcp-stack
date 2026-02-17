@@ -31,7 +31,8 @@
       "mcp__railway__*",
       "mcp__filesystem__*",
       "mcp__crawl4ai__md",
-      "mcp__crawl4ai__ask"
+      "mcp__crawl4ai__ask",
+      "mcp__searxng-mcp__searxng_web_search"
     ],
     "deny": []
   }

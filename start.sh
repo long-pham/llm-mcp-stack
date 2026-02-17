@@ -23,8 +23,32 @@ update_env() {
     fi
 }
 
+# Load .env values safely (without executing shell code).
+# Note: does not handle escaped quotes inside values (e.g. "val\"ue").
+load_env_file() {
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip comments/blank lines.
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+
+        if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+
+            # Strip matching surrounding quotes if present.
+            if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+                value="${BASH_REMATCH[1]}"
+            elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+                value="${BASH_REMATCH[1]}"
+            fi
+
+            export "${key}=${value}"
+        fi
+    done < .env
+}
+
 # Load current values
-source .env
+load_env_file
 
 # Auto-generate POSTGRES_PASSWORD if missing or placeholder
 if [[ -z "$POSTGRES_PASSWORD" ]] || [[ "$POSTGRES_PASSWORD" == *"your-secure-password"* ]] || [[ "$POSTGRES_PASSWORD" == *"CHANGE_ME"* ]]; then
@@ -45,7 +69,7 @@ if [[ -z "$SEARXNG_SECRET_KEY" ]] || [[ "$SEARXNG_SECRET_KEY" == *"your-searxng-
 fi
 
 # Reload after generating secrets
-source .env
+load_env_file
 
 # Set default ports if not configured
 SEARXNG_PORT=${SEARXNG_PORT:-38080}
