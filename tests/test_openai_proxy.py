@@ -11,8 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
-import openai_proxy
-from openai_proxy import (
+from llm_mcp_stack import openai_proxy
+from llm_mcp_stack.openai_proxy import (
     _build_anthropic_kwargs,
     _build_cli_cmd,
     _extract_cli_text,
@@ -32,9 +32,9 @@ from openai_proxy import (
 @pytest.fixture(autouse=True)
 def _reset_singletons():
     """Reset module-level singletons between tests."""
-    openai_proxy._anthropic_client = None
+    openai_proxy._app_context.anthropic_client = None
     yield
-    openai_proxy._anthropic_client = None
+    openai_proxy._app_context.anthropic_client = None
 
 
 @pytest.fixture(autouse=True)
@@ -236,10 +236,34 @@ class TestBuildAnthropicKwargs:
         }
         kwargs = _build_anthropic_kwargs(body)
         assert kwargs["model"] == "claude-sonnet-4-5-20250929"
-        assert kwargs["max_tokens"] == 4096
+        assert kwargs["max_tokens"] == 16_384
         assert kwargs["messages"] == [{"role": "user", "content": "Hi"}]
         assert "system" not in kwargs
         assert "temperature" not in kwargs
+
+    def test_default_max_tokens_opus(self):
+        body = {
+            "model": "claude-opus-4-6",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["max_tokens"] == 32_768
+
+    def test_default_max_tokens_haiku(self):
+        body = {
+            "model": "claude-haiku-4-5-20251001",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["max_tokens"] == 8_192
+
+    def test_default_max_tokens_unknown_model(self):
+        body = {
+            "model": "some-future-model",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        kwargs = _build_anthropic_kwargs(body)
+        assert kwargs["max_tokens"] == 8_192
 
     def test_system_included(self):
         body = {
@@ -455,9 +479,13 @@ class TestMakeChunk:
         assert chunk["choices"][0]["finish_reason"] == "stop"
         assert "content" not in chunk["choices"][0]["delta"]
 
-    def test_empty_content_not_in_delta(self):
+    def test_none_content_not_in_delta(self):
         chunk = _make_chunk("id1", 100, "model")
         assert "content" not in chunk["choices"][0]["delta"]
+
+    def test_empty_string_content_included(self):
+        chunk = _make_chunk("id1", 100, "model", content="")
+        assert chunk["choices"][0]["delta"]["content"] == ""
 
     def test_usage_included(self):
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
@@ -684,7 +712,22 @@ class TestAnthropicNonStreaming:
         })
 
         call_kwargs = mock_client.messages.create.call_args[1]
-        assert call_kwargs["max_tokens"] == 4096
+        assert call_kwargs["max_tokens"] == 16_384
+
+    @patch.object(openai_proxy, "BACKEND", "anthropic")
+    @patch.object(openai_proxy, "_get_anthropic_client")
+    def test_default_max_tokens_opus(self, mock_get_client, client):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=_mock_response())
+        mock_get_client.return_value = mock_client
+
+        client.post("/v1/chat/completions", json={
+            "model": "claude-opus-4-6",
+            "messages": [{"role": "user", "content": "Hi"}],
+        })
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == 32_768
 
     @patch.object(openai_proxy, "BACKEND", "anthropic")
     @patch.object(openai_proxy, "_get_anthropic_client")
@@ -1021,7 +1064,7 @@ class TestErrorHandling:
 
 class TestCLINonStreaming:
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     def test_cli_success(self, mock_exec, client):
         mock_proc = AsyncMock()
         mock_proc.returncode = 0
@@ -1053,7 +1096,7 @@ class TestCLINonStreaming:
         assert resp.headers.get("x-session-id") == "sess-123"
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     def test_cli_error(self, mock_exec, client):
         mock_proc = AsyncMock()
         mock_proc.returncode = 1
@@ -1071,7 +1114,7 @@ class TestCLINonStreaming:
         assert "CLI error" in resp.json()["error"]["message"]
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     def test_cli_plain_text_output(self, mock_exec, client):
         mock_proc = AsyncMock()
         mock_proc.returncode = 0
@@ -1089,7 +1132,7 @@ class TestCLINonStreaming:
         assert resp.json()["choices"][0]["message"]["content"] == "Plain text response"
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     def test_cli_excludes_claudecode_env(self, mock_exec, client):
         mock_proc = AsyncMock()
         mock_proc.returncode = 0
@@ -1108,7 +1151,7 @@ class TestCLINonStreaming:
         assert "CLAUDECODE" not in env
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec", side_effect=FileNotFoundError("No such file"))
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec", side_effect=FileNotFoundError("No such file"))
     def test_cli_not_found(self, mock_exec, client):
         resp = client.post("/v1/chat/completions", json={
             "model": "claude-sonnet-4-5-20250929",
@@ -1119,7 +1162,7 @@ class TestCLINonStreaming:
         assert resp.json()["error"]["type"] == "configuration_error"
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     def test_cli_session_id_header(self, mock_exec, client):
         mock_proc = AsyncMock()
         mock_proc.returncode = 0
@@ -1143,7 +1186,7 @@ class TestCLINonStreaming:
         assert cmd_list[idx + 1] == "my-session"
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     def test_cli_system_prompt_forwarded(self, mock_exec, client):
         mock_proc = AsyncMock()
         mock_proc.returncode = 0
@@ -1166,7 +1209,7 @@ class TestCLINonStreaming:
         assert cmd_list[idx + 1] == "You are a pirate"
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     def test_cli_max_tokens_forwarded(self, mock_exec, client):
         mock_proc = AsyncMock()
         mock_proc.returncode = 0
@@ -1194,7 +1237,7 @@ class TestCLINonStreaming:
 
 class TestCLIStreaming:
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     @pytest.mark.asyncio
     async def test_cli_streaming(self, mock_exec, async_client):
         async def aiter_lines():
@@ -1239,7 +1282,7 @@ class TestCLIStreaming:
         assert " world" in content_chunks
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     @pytest.mark.asyncio
     async def test_cli_streaming_assistant_event(self, mock_exec, async_client):
         async def aiter_lines():
@@ -1278,7 +1321,7 @@ class TestCLIStreaming:
         assert content_found
 
     @patch.object(openai_proxy, "BACKEND", "cli")
-    @patch("openai_proxy.asyncio.create_subprocess_exec")
+    @patch("llm_mcp_stack.openai_proxy.asyncio.create_subprocess_exec")
     @pytest.mark.asyncio
     async def test_cli_streaming_session_id_from_system_event(self, mock_exec, async_client):
         async def aiter_lines():
@@ -1324,7 +1367,7 @@ class TestCLIStreaming:
 
 class TestSingletonClient:
     def test_anthropic_client_reused(self):
-        with patch("openai_proxy.anthropic.AsyncAnthropic") as MockClass:
+        with patch("llm_mcp_stack.openai_proxy.anthropic.AsyncAnthropic") as MockClass:
             mock_instance = MagicMock()
             MockClass.return_value = mock_instance
 

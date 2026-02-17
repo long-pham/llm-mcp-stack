@@ -5,8 +5,8 @@ Supports two backends:
   - "cli": Invokes the Claude Code CLI via subprocess
 
 Usage:
-  ANTHROPIC_API_KEY=sk-... uv run python openai_proxy.py
-  OPENAI_PROXY_BACKEND=cli uv run python openai_proxy.py
+  ANTHROPIC_API_KEY=sk-... uv run llm-mcp-proxy
+  OPENAI_PROXY_BACKEND=cli uv run llm-mcp-proxy
 """
 
 from __future__ import annotations
@@ -106,6 +106,12 @@ _MODELS_RESPONSE = {
     ],
 }
 
+MAX_OUTPUT_TOKENS: dict[str, int] = {
+    "claude-opus-4-6": 32_768,
+    "claude-sonnet-4-5-20250929": 16_384,
+    "claude-haiku-4-5-20251001": 8_192,
+}
+
 STOP_REASON_MAP: dict[str | None, str] = {
     "end_turn": "stop",
     "max_tokens": "length",
@@ -116,23 +122,32 @@ STOP_REASON_MAP: dict[str | None, str] = {
 # App lifecycle
 # ---------------------------------------------------------------------------
 
-_anthropic_client: anthropic.AsyncAnthropic | None = None
+class AppContext:
+    """Holds application-wide context and resources."""
+
+    def __init__(self):
+        self.anthropic_client: anthropic.AsyncAnthropic | None = None
+
+    async def aclose(self):
+        if self.anthropic_client:
+            await self.anthropic_client.aclose()
+            self.anthropic_client = None
+
+
+_app_context = AppContext()
 
 
 def _get_anthropic_client() -> anthropic.AsyncAnthropic:
-    global _anthropic_client
-    if _anthropic_client is None:
-        _anthropic_client = anthropic.AsyncAnthropic()
-    return _anthropic_client
+    if _app_context.anthropic_client is None:
+        _app_context.anthropic_client = anthropic.AsyncAnthropic()
+    return _app_context.anthropic_client
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Manage the app's lifecycle."""
     yield
-    global _anthropic_client
-    if _anthropic_client is not None:
-        await _anthropic_client.close()
-        _anthropic_client = None
+    await _app_context.aclose()
 
 
 app = FastAPI(title="OpenAI-Compatible Claude Proxy", lifespan=lifespan)
@@ -211,18 +226,35 @@ def _map_stop_reason(reason: str | None) -> str:
     return STOP_REASON_MAP.get(reason, "stop")
 
 
-def _translate_messages(
-    messages: list[dict[str, Any]],
-) -> tuple[str | None, list[dict[str, Any]]]:
-    """Extract system prompt and convert messages to Anthropic format."""
-    system_parts: list[str] = []
-    converted: list[dict[str, Any]] = []
+def _extract_system_prompt(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
+    """Extracts the system prompt and returns the remaining messages."""
+    system_parts = []
+    other_messages = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                content = "\n".join(text_parts)
+            system_parts.append(content)
+        else:
+            other_messages.append(msg)
+    
+    system_prompt = "\n\n".join(system_parts) if system_parts else None
+    return system_prompt, other_messages
 
+def _convert_and_merge_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Converts messages to Anthropic format and merges consecutive same-role messages."""
+    converted = []
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
 
-        # Handle content that is a list of content parts
         if isinstance(content, list):
             text_parts = []
             for part in content:
@@ -232,29 +264,26 @@ def _translate_messages(
                     text_parts.append(part)
             content = "\n".join(text_parts)
 
-        if role == "system":
-            system_parts.append(
-                content if isinstance(content, str) else json.dumps(content)
-            )
-            continue
-
-        # Map "assistant" stays "assistant", everything else becomes "user"
         anthropic_role = "assistant" if role == "assistant" else "user"
 
-        # Merge consecutive same-role messages
         if converted and converted[-1]["role"] == anthropic_role:
-            prev = converted[-1]["content"]
-            converted[-1]["content"] = str(prev) + "\n" + str(content)
+            prev_content = converted[-1]["content"]
+            converted[-1]["content"] = f"{prev_content}\n{content}"
         else:
             converted.append({"role": anthropic_role, "content": content})
+            
+    return converted
 
-    system_prompt = "\n\n".join(system_parts) if system_parts else None
+def _translate_messages(
+    messages: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Extract system prompt and convert messages to Anthropic format."""
+    system_prompt, remaining_messages = _extract_system_prompt(messages)
+    converted = _convert_and_merge_messages(remaining_messages)
 
-    # Ensure the first message is from "user"
     if converted and converted[0]["role"] != "user":
         converted.insert(0, {"role": "user", "content": "(continued conversation)"})
 
-    # Ensure we have at least one message
     if not converted:
         converted.append({"role": "user", "content": "(empty)"})
 
@@ -268,7 +297,7 @@ def _build_anthropic_kwargs(body: dict[str, Any]) -> dict[str, Any]:
 
     max_tokens = body.get("max_tokens")
     if max_tokens is None:
-        max_tokens = 4096
+        max_tokens = MAX_OUTPUT_TOKENS.get(model, 8_192)
 
     kwargs: dict[str, Any] = {
         "model": model,
@@ -307,7 +336,7 @@ def _make_chunk(
 ) -> dict[str, Any]:
     """Build one OpenAI-compatible streaming chunk."""
     delta: dict[str, str] = {}
-    if content:
+    if content is not None:
         delta["content"] = content
 
     chunk: dict[str, Any] = {
@@ -329,11 +358,12 @@ def _make_chunk(
 # ---------------------------------------------------------------------------
 
 
-async def _anthropic_chat(body: dict[str, Any]) -> JSONResponse:
+async def _anthropic_chat(
+    body: dict[str, Any], client: anthropic.AsyncAnthropic
+) -> JSONResponse:
     """Non-streaming chat completion via Anthropic API."""
     kwargs = _build_anthropic_kwargs(body)
     model = kwargs["model"]
-    client = _get_anthropic_client()
 
     response = await client.messages.create(**kwargs)
 
@@ -364,13 +394,14 @@ async def _anthropic_chat(body: dict[str, Any]) -> JSONResponse:
     )
 
 
-async def _anthropic_chat_stream(body: dict[str, Any]):
+async def _anthropic_chat_stream(
+    body: dict[str, Any], client: anthropic.AsyncAnthropic
+):
     """Streaming chat completion via Anthropic API."""
     kwargs = _build_anthropic_kwargs(body)
     model = kwargs["model"]
     comp_id = _completion_id()
     created = _timestamp()
-    client = _get_anthropic_client()
 
     async def event_generator():
         async with client.messages.stream(**kwargs) as stream:
@@ -497,7 +528,7 @@ async def _cli_chat(
     model = _resolve_model(body.get("model"))
     messages = body.get("messages", [])
     prompt = _messages_to_prompt_string(messages)
-    system_prompt, _ = _translate_messages(messages)
+    system_prompt, _ = _extract_system_prompt(messages)
 
     max_tokens = body.get("max_tokens")
 
@@ -591,7 +622,7 @@ async def _cli_chat_stream(
     comp_id = _completion_id()
     created = _timestamp()
     prompt = _messages_to_prompt_string(messages)
-    system_prompt, _ = _translate_messages(messages)
+    system_prompt, _ = _extract_system_prompt(messages)
 
     max_tokens = body.get("max_tokens")
 
@@ -714,10 +745,13 @@ async def chat_completions(
             if stream:
                 return await _cli_chat_stream(body, session_id=x_session_id)
             return await _cli_chat(body, session_id=x_session_id)
-        else:
-            if stream:
-                return await _anthropic_chat_stream(body)
-            return await _anthropic_chat(body)
+        
+        # All other backends use the anthropic client
+        client = _get_anthropic_client()
+        if stream:
+            return await _anthropic_chat_stream(body, client)
+        return await _anthropic_chat(body, client)
+
     except anthropic.AuthenticationError as e:
         return _openai_error(str(e), status=401, err_type="authentication_error")
     except anthropic.RateLimitError as e:
@@ -735,7 +769,8 @@ async def chat_completions(
 # Entrypoint
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point for the ``llm-mcp-proxy`` console script."""
     log.info(
         "Starting OpenAI-compatible Claude proxy (backend=%s) on port %d",
         BACKEND,
@@ -745,3 +780,7 @@ if __name__ == "__main__":
     log.info("Default model: %s", DEFAULT_MODEL)
     log.info("Auth: %s", "enabled" if API_KEY else "disabled")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
+
+
+if __name__ == "__main__":
+    main()

@@ -8,6 +8,8 @@ Usage:
     uv run python test_mcp_services.py  # Quick health check (alt)
 """
 
+import os
+
 import httpx
 
 try:
@@ -16,7 +18,7 @@ except ImportError:
     pytest = None  # Allow running standalone without pytest
 
 # Configuration - adjust host if needed
-BASE_HOST = "opidev.local"
+BASE_HOST = os.getenv("MCP_BASE_HOST", "localhost")
 TIMEOUT = 10.0
 
 
