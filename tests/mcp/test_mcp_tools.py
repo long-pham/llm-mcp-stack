@@ -6,7 +6,7 @@ Uses the official MCP Python SDK to properly test MCP tools via SSE/StreamableHT
 Usage:
     uv run pytest test_mcp_tools.py -v           # Run all MCP tool tests
     uv run pytest test_mcp_tools.py -v -k crawl  # Run only crawl4ai tests
-    uv run pytest test_mcp_tools.py -v -k metamcp  # Run MetaMCP tests
+    uv run pytest test_mcp_tools.py -v -k mcphub # Run MCPHub tests
 """
 
 import asyncio
@@ -28,24 +28,22 @@ load_dotenv()
 BASE_HOST = os.getenv("MCP_BASE_HOST", "localhost")
 TIMEOUT = 30.0
 
-# MetaMCP with Streamable HTTP (from .env)
-METAMCP_API_KEY = os.getenv("METAMCP_API_KEY", "")
-METAMCP_URL = os.getenv("METAMCP_URL", "http://localhost:12008/metamcp/general/mcp")
+# MCPHub endpoint
+MCPHUB_URL = os.getenv("MCPHUB_URL", f"http://localhost:3000/sse")
 
 # MCP Server endpoints - SSE transport
 MCP_SERVERS = {
     "searxng-mcp": {
-        "sse_url": f"http://{BASE_HOST}:38081/sse",
+        "sse_url": f"http://{BASE_HOST}:38081/mcp",
         "mcp_url": f"http://{BASE_HOST}:38081/mcp",
         "health_url": f"http://{BASE_HOST}:38081/health",
-        "transport": "sse",
-    },
-    "metamcp": {
-        "sse_url": f"http://{BASE_HOST}:12008/sse",
-        "mcp_url": METAMCP_URL,
-        "health_url": f"http://{BASE_HOST}:12008/health",
         "transport": "streamable_http",
-        "api_key": METAMCP_API_KEY,
+    },
+    "mcphub": {
+        "sse_url": f"http://{BASE_HOST}:3000/sse",
+        "mcp_url": MCPHUB_URL,
+        "health_url": f"http://{BASE_HOST}:3000/api/auth/login",
+        "transport": "sse",
     },
     "crawl4ai": {
         "sse_url": f"http://{BASE_HOST}:11235/mcp/sse",
@@ -63,13 +61,8 @@ async def mcp_session(server_name: str):
     transport = server.get("transport", "sse")
 
     if transport == "streamable_http":
-        # Use StreamableHTTP transport with optional API key auth
-        headers = {}
-        if server.get("api_key"):
-            headers["Authorization"] = f"Bearer {server['api_key']}"
-
-        # Create httpx client with headers for authentication
-        async with httpx.AsyncClient(headers=headers, timeout=TIMEOUT) as http_client:
+        # Use StreamableHTTP transport
+        async with httpx.AsyncClient(timeout=TIMEOUT) as http_client:
             async with streamable_http_client(
                 server["mcp_url"],
                 http_client=http_client
@@ -114,21 +107,21 @@ class TestMCPServerDiscovery:
         except Exception as e:
             pytest.skip(f"Could not connect to SearXNG MCP: {e}")
 
-    async def test_metamcp_list_tools(self):
-        """Test listing tools from MetaMCP aggregator."""
-        if not await check_health("metamcp"):
-            pytest.skip("MetaMCP server not healthy")
+    async def test_mcphub_list_tools(self):
+        """Test listing tools from MCPHub aggregator."""
+        if not await check_health("mcphub"):
+            pytest.skip("MCPHub server not healthy")
 
         try:
-            async with mcp_session("metamcp") as session:
+            async with mcp_session("mcphub") as session:
                 tools = await session.list_tools()
                 assert tools.tools is not None
                 tool_names = [t.name for t in tools.tools]
-                print(f"\nMetaMCP aggregated tools ({len(tool_names)}): {tool_names[:10]}...")
-                # MetaMCP aggregates tools from multiple servers
+                print(f"\nMCPHub aggregated tools ({len(tool_names)}): {tool_names[:10]}...")
+                # MCPHub aggregates tools from multiple servers
                 assert len(tool_names) > 0, "Expected at least one aggregated tool"
         except Exception as e:
-            pytest.skip(f"Could not connect to MetaMCP: {e}")
+            pytest.skip(f"Could not connect to MCPHub: {e}")
 
     async def test_crawl4ai_list_tools(self):
         """Test listing tools from Crawl4AI MCP server."""
@@ -269,43 +262,43 @@ class TestSearXNGTools:
             pytest.skip(f"SearXNG search tool test failed: {e}")
 
 
-class TestMetaMCPAggregation:
-    """Test MetaMCP tool aggregation."""
+class TestMCPHubAggregation:
+    """Test MCPHub tool aggregation."""
 
-    async def test_metamcp_aggregates_tools(self):
-        """Test that MetaMCP aggregates tools from connected servers."""
-        if not await check_health("metamcp"):
-            pytest.skip("MetaMCP server not healthy")
+    async def test_mcphub_aggregates_tools(self):
+        """Test that MCPHub aggregates tools from connected servers."""
+        if not await check_health("mcphub"):
+            pytest.skip("MCPHub server not healthy")
 
         try:
-            async with mcp_session("metamcp") as session:
+            async with mcp_session("mcphub") as session:
                 tools = await session.list_tools()
                 assert tools.tools is not None
 
                 tool_names = [t.name for t in tools.tools]
-                print(f"\nMetaMCP total tools: {len(tool_names)}")
+                print(f"\nMCPHub total tools: {len(tool_names)}")
                 print(f"Sample tools: {tool_names[:10]}")
 
                 # Log tool details
                 for tool in tools.tools[:5]:
                     print(f"  - {tool.name}: {tool.description[:50] if tool.description else 'No description'}...")
         except Exception as e:
-            pytest.skip(f"MetaMCP aggregation test failed: {e}")
+            pytest.skip(f"MCPHub aggregation test failed: {e}")
 
-    async def test_metamcp_list_resources(self):
-        """Test listing resources from MetaMCP."""
-        if not await check_health("metamcp"):
-            pytest.skip("MetaMCP server not healthy")
+    async def test_mcphub_list_resources(self):
+        """Test listing resources from MCPHub."""
+        if not await check_health("mcphub"):
+            pytest.skip("MCPHub server not healthy")
 
         try:
-            async with mcp_session("metamcp") as session:
+            async with mcp_session("mcphub") as session:
                 resources = await session.list_resources()
                 if resources.resources:
-                    print(f"\nMetaMCP resources: {len(resources.resources)}")
+                    print(f"\nMCPHub resources: {len(resources.resources)}")
                     for r in resources.resources[:5]:
                         print(f"  - {r.name}: {r.uri}")
         except Exception as e:
-            pytest.skip(f"MetaMCP resources test failed: {e}")
+            pytest.skip(f"MCPHub resources test failed: {e}")
 
 
 class TestMCPProtocolCompliance:

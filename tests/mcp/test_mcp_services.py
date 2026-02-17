@@ -36,7 +36,7 @@ if pytest and not all(
         _endpoint_reachable(f"http://{BASE_HOST}:38080/healthz"),
         _endpoint_reachable(f"http://{BASE_HOST}:38081/health"),
         _endpoint_reachable(f"http://{BASE_HOST}:11235/health"),
-        _endpoint_reachable(f"http://{BASE_HOST}:12008/health"),
+        _endpoint_reachable(f"http://{BASE_HOST}:3000"),
     ]
 ):
     pytestmark = pytest.mark.skip(
@@ -126,38 +126,29 @@ class TestCrawl4AI:
             )
 
 
-class TestMetaMCP:
-    """Tests for MetaMCP aggregator/gateway."""
+class TestMCPHub:
+    """Tests for MCPHub aggregator/gateway."""
 
-    base_url = f"http://{BASE_HOST}:12008"
+    base_url = f"http://{BASE_HOST}:3000"
 
     def test_health_endpoint(self):
-        """Test MetaMCP health endpoint."""
+        """Test MCPHub health endpoint."""
         with httpx.Client(timeout=TIMEOUT) as client:
-            response = client.get(f"{self.base_url}/health")
-            assert response.status_code == 200, f"MetaMCP health check failed: {response.status_code}"
+            response = client.get(self.base_url)
+            assert response.status_code == 200, f"MCPHub health check failed: {response.status_code}"
 
-    def test_homepage_redirect(self):
-        """Test MetaMCP homepage redirects (Next.js app)."""
+    def test_homepage_loads(self):
+        """Test MCPHub dashboard is accessible."""
         with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
             response = client.get(self.base_url)
-            assert response.status_code == 200, f"MetaMCP homepage failed: {response.status_code}"
-
-    def test_sse_endpoint_exists(self):
-        """Test MetaMCP SSE endpoint exists."""
-        with httpx.Client(timeout=TIMEOUT) as client:
-            response = client.get(f"{self.base_url}/sse")
-            # 307 redirect is expected
-            assert response.status_code in [200, 307, 400, 405], (
-                f"MetaMCP SSE endpoint check failed: {response.status_code}"
-            )
+            assert response.status_code == 200, f"MCPHub homepage failed: {response.status_code}"
 
     def test_mcp_endpoint_exists(self):
-        """Test MetaMCP MCP endpoint exists."""
+        """Test MCPHub MCP endpoint exists."""
         with httpx.Client(timeout=TIMEOUT) as client:
             response = client.get(f"{self.base_url}/mcp")
             assert response.status_code in [200, 307, 400, 405], (
-                f"MetaMCP MCP endpoint check failed: {response.status_code}"
+                f"MCPHub MCP endpoint check failed: {response.status_code}"
             )
 
 
@@ -170,7 +161,7 @@ class TestConnectivity:
             ("SearXNG", f"http://{BASE_HOST}:38080/healthz"),
             ("SearXNG-MCP", f"http://{BASE_HOST}:38081/health"),
             ("Crawl4AI", f"http://{BASE_HOST}:11235/health"),
-            ("MetaMCP", f"http://{BASE_HOST}:12008/health"),
+            ("MCPHub", f"http://{BASE_HOST}:3000"),
         ]
 
         results = []
@@ -239,32 +230,11 @@ class TestMCPProtocol:
                 f"SearXNG MCP endpoint failed: {response.status_code}"
             )
 
-    def test_metamcp_sse_endpoint(self):
-        """Test MetaMCP SSE endpoint for MCP connections."""
-        with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
-            response = client.get(f"http://{BASE_HOST}:12008/sse")
-            print(f"\nMetaMCP SSE status: {response.status_code}")
-            # Check response content type for SSE
-            content_type = response.headers.get("content-type", "")
-            print(f"Content-Type: {content_type}")
-
-    def test_metamcp_mcp_endpoint(self):
-        """Test MetaMCP MCP JSON-RPC endpoint."""
+    def test_mcphub_mcp_endpoint(self):
+        """Test MCPHub MCP endpoint for aggregated connections."""
         with httpx.Client(timeout=TIMEOUT) as client:
-            # Try a JSON-RPC style request
-            response = client.post(
-                f"http://{BASE_HOST}:12008/mcp",
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "initialize",
-                    "params": {},
-                    "id": 1,
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            print(f"\nMetaMCP MCP endpoint: {response.status_code}")
-            if response.status_code == 200:
-                print(f"Response: {response.text[:200]}")
+            response = client.get(f"http://{BASE_HOST}:3000/mcp")
+            print(f"\nMCPHub MCP status: {response.status_code}")
 
     def test_crawl4ai_mcp_endpoint(self):
         """Test Crawl4AI MCP endpoint."""
@@ -286,7 +256,7 @@ def main():
         ("SearXNG", f"http://{BASE_HOST}:38080", "/healthz"),
         ("SearXNG-MCP", f"http://{BASE_HOST}:38081", "/health"),
         ("Crawl4AI", f"http://{BASE_HOST}:11235", "/health"),
-        ("MetaMCP", f"http://{BASE_HOST}:12008", "/health"),
+        ("MCPHub", f"http://{BASE_HOST}:3000", ""),
     ]
 
     all_passed = True

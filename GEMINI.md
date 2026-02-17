@@ -12,7 +12,7 @@ The **llm-mcp-stack** is a Docker Compose-based environment designed to provide 
 - **SearXNG**: Privacy-respecting metasearch engine.
 - **SearXNG MCP Server**: Connects SearXNG to the MCP ecosystem.
 - **Crawl4AI**: High-performance web crawling and scraping service.
-- **MetaMCP**: An MCP aggregator and gateway with a PostgreSQL backend, used to manage multiple MCP servers.
+- **MCPHub**: An MCP aggregator and gateway with file-based config, used to manage multiple MCP servers.
 
 ### Main Technologies:
 - **Python 3.12+** (FastAPI, Anthropic SDK, Uvicorn)

@@ -81,70 +81,29 @@ services:
       start_period: 30s
 
   # ===========================================
-  # MetaMCP - MCP Aggregator/Gateway
+  # MCPHub - MCP Aggregator/Gateway
   # ===========================================
-  metamcp-postgres:
-    image: postgres:16-alpine
-    container_name: metamcp-postgres
+  mcphub:
+    image: samanhappy/mcphub:latest
+    container_name: mcphub
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-metamcp_db}
-      POSTGRES_USER: ${POSTGRES_USER:-metamcp_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env}
-    # Uncomment to expose Postgres externally (not recommended for security)
-    # ports:
-    #   - "${POSTGRES_EXTERNAL_PORT:-9433}:5432"
-    volumes:
-      - metamcp-postgres:/var/lib/postgresql/data
-    networks:
-      - mcp-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-metamcp_user} -d ${POSTGRES_DB:-metamcp_db}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  metamcp:
-    image: ghcr.io/metatool-ai/metamcp:latest
-    container_name: metamcp
-    pull_policy: always
-    restart: unless-stopped
-    env_file:
-      - .env
     ports:
-      - "${METAMCP_PORT:-12008}:12008"
-    environment:
-      # Postgres connection
-      POSTGRES_HOST: ${POSTGRES_HOST:-metamcp-postgres}
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-      POSTGRES_USER: ${POSTGRES_USER:-metamcp_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-metamcp_db}
-      # Database URL
-      DATABASE_URL: postgresql://${POSTGRES_USER:-metamcp_user}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-metamcp-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-metamcp_db}
-      # Application URLs
-      APP_URL: ${APP_URL:-http://localhost:12008}
-      NEXT_PUBLIC_APP_URL: ${APP_URL:-http://localhost:12008}
-      # Auth
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-      # Docker networking - CRITICAL for inter-container MCP communication
-      TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL: ${TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL:-true}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      metamcp-postgres:
-        condition: service_healthy
+      - "${MCPHUB_PORT:-3000}:3000"
+    volumes:
+      - ./mcphub/mcp_settings.json:/app/mcp_settings.json
     networks:
       - mcp-network
+    depends_on:
+      searxng-mcp:
+        condition: service_started
+      crawl4ai:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:12008/api/health"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/auth/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 15s
 
 networks:
   mcp-network:
@@ -152,4 +111,3 @@ networks:
 
 volumes:
   crawl4ai-data:
-  metamcp-postgres:

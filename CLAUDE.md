@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Docker Compose stack providing MCP (Model Context Protocol) services with an OpenAI-compatible API proxy for Claude. The stack runs SearXNG (web search), Crawl4AI (web crawling), and MetaMCP (MCP gateway/aggregator), plus a FastAPI proxy that translates OpenAI API calls to Anthropic's Claude API.
+Docker Compose stack providing MCP (Model Context Protocol) services with an OpenAI-compatible API proxy for Claude. The stack runs SearXNG (web search), Crawl4AI (web crawling), and MCPHub (MCP gateway/aggregator), plus a FastAPI proxy that translates OpenAI API calls to Anthropic's Claude API.
 
 ## Commands
 
@@ -55,11 +55,11 @@ All services share the `mcp-network` bridge network:
 - **searxng** (port 38080): Privacy-respecting metasearch engine
 - **searxng-mcp** (port 38081): MCP server wrapping SearXNG
 - **crawl4ai** (port 11235): Web crawling with headless Chrome (2GB shm, 4GB memory limit)
-- **metamcp** (port 12008) + **metamcp-postgres**: MCP aggregator/gateway with PostgreSQL backend
+- **mcphub** (port 3000): MCP aggregator/gateway with file-based config (`mcphub/mcp_settings.json`)
 
 ### Test Structure
 - `tests/test_openai_proxy.py` — Unit tests for the proxy (mocked Anthropic client and CLI subprocess, no external calls needed)
 - `tests/mcp/` — Integration tests for MCP services (require running Docker containers)
 
 ## Configuration
-All configuration via environment variables in `.env` (see `.env.example`). The `start.sh` script auto-generates secrets (POSTGRES_PASSWORD, BETTER_AUTH_SECRET, SEARXNG_SECRET_KEY) on first run.
+All configuration via environment variables in `.env` (see `.env.example`). The `start.sh` script auto-generates SEARXNG_SECRET_KEY on first run.

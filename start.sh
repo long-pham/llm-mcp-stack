@@ -50,18 +50,6 @@ load_env_file() {
 # Load current values
 load_env_file
 
-# Auto-generate POSTGRES_PASSWORD if missing or placeholder
-if [[ -z "$POSTGRES_PASSWORD" ]] || [[ "$POSTGRES_PASSWORD" == *"your-secure-password"* ]] || [[ "$POSTGRES_PASSWORD" == *"CHANGE_ME"* ]]; then
-    echo "Generating POSTGRES_PASSWORD..."
-    update_env "POSTGRES_PASSWORD" "$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)"
-fi
-
-# Auto-generate BETTER_AUTH_SECRET if missing or placeholder
-if [[ -z "$BETTER_AUTH_SECRET" ]] || [[ "$BETTER_AUTH_SECRET" == *"your-auth-secret"* ]] || [[ "$BETTER_AUTH_SECRET" == *"CHANGE_ME"* ]]; then
-    echo "Generating BETTER_AUTH_SECRET..."
-    update_env "BETTER_AUTH_SECRET" "$(openssl rand -base64 32)"
-fi
-
 # Auto-generate SEARXNG_SECRET_KEY if missing or placeholder
 if [[ -z "$SEARXNG_SECRET_KEY" ]] || [[ "$SEARXNG_SECRET_KEY" == *"your-searxng-secret"* ]]; then
     echo "Generating SEARXNG_SECRET_KEY..."
@@ -75,7 +63,7 @@ load_env_file
 SEARXNG_PORT=${SEARXNG_PORT:-38080}
 SEARXNG_MCP_PORT=${SEARXNG_MCP_PORT:-38081}
 CRAWL4AI_PORT=${CRAWL4AI_PORT:-11235}
-METAMCP_PORT=${METAMCP_PORT:-12008}
+MCPHUB_PORT=${MCPHUB_PORT:-3000}
 
 # Start all services
 echo "Starting LLM MCP services..."
@@ -92,9 +80,12 @@ echo "  - SearXNG:        http://localhost:${SEARXNG_PORT}"
 echo "  - SearXNG MCP:    http://localhost:${SEARXNG_MCP_PORT}/mcp"
 echo "  - Crawl4AI:       http://localhost:${CRAWL4AI_PORT}"
 echo "  - Crawl4AI MCP:   http://localhost:${CRAWL4AI_PORT}/mcp/sse"
-echo "  - MetaMCP:        http://localhost:${METAMCP_PORT}"
+echo "  - MCPHub:         http://localhost:${MCPHUB_PORT}"
 echo ""
-echo "To add to Claude Code:"
+echo "To add to Claude Code (aggregated via MCPHub):"
+echo "  claude mcp add --transport sse mcphub http://localhost:${MCPHUB_PORT}/mcp"
+echo ""
+echo "Or add individual servers:"
 echo "  claude mcp add --transport sse crawl4ai http://localhost:${CRAWL4AI_PORT}/mcp/sse"
 echo "  claude mcp add --transport http searxng http://localhost:${SEARXNG_MCP_PORT}/mcp"
 echo ""
