@@ -226,22 +226,28 @@ def _map_stop_reason(reason: str | None) -> str:
     return STOP_REASON_MAP.get(reason, "stop")
 
 
+def _flatten_content(content: Any) -> str:
+    """Flatten OpenAI-style content (string or list of blocks) to a single string."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    parts.append(part.get("text", ""))
+            elif isinstance(part, str):
+                parts.append(part)
+        return "\n".join(parts)
+    return str(content) if content is not None else ""
+
 def _extract_system_prompt(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
     """Extracts the system prompt and returns the remaining messages."""
     system_parts = []
     other_messages = []
     for msg in messages:
         if msg.get("role") == "system":
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                text_parts = []
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
-                    elif isinstance(part, str):
-                        text_parts.append(part)
-                content = "\n".join(text_parts)
-            system_parts.append(content)
+            system_parts.append(_flatten_content(msg.get("content", "")))
         else:
             other_messages.append(msg)
     
@@ -253,16 +259,7 @@ def _convert_and_merge_messages(messages: list[dict[str, Any]]) -> list[dict[str
     converted = []
     for msg in messages:
         role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        if isinstance(content, list):
-            text_parts = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    text_parts.append(part.get("text", ""))
-                elif isinstance(part, str):
-                    text_parts.append(part)
-            content = "\n".join(text_parts)
+        content = _flatten_content(msg.get("content", ""))
 
         anthropic_role = "assistant" if role == "assistant" else "user"
 
@@ -330,12 +327,15 @@ def _make_chunk(
     created: int,
     model: str,
     *,
+    role: str | None = None,
     content: str | None = None,
     finish_reason: str | None = None,
     usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Build one OpenAI-compatible streaming chunk."""
     delta: dict[str, str] = {}
+    if role is not None:
+        delta["role"] = role
     if content is not None:
         delta["content"] = content
 
@@ -404,6 +404,13 @@ async def _anthropic_chat_stream(
     created = _timestamp()
 
     async def event_generator():
+        # Yield initial role chunk
+        yield {
+            "data": json.dumps(
+                _make_chunk(comp_id, created, model, role="assistant")
+            )
+        }
+
         async with client.messages.stream(**kwargs) as stream:
             async for text in stream.text_stream:
                 yield {
@@ -451,13 +458,8 @@ def _messages_to_prompt_string(messages: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for msg in messages:
         role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            content = " ".join(
-                block.get("text", "")
-                for block in content
-                if isinstance(block, dict)
-            )
+        content = _flatten_content(msg.get("content", ""))
+        
         if role == "system":
             parts.append(f"[System]: {content}")
         elif role == "assistant":
@@ -639,76 +641,92 @@ async def _cli_chat_stream(
 
     async def event_generator():
         nonlocal comp_id
+        proc = None
+
+        # Yield initial role chunk
+        yield {
+            "data": json.dumps(
+                _make_chunk(comp_id, created, model, role="assistant")
+            )
+        }
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=_get_cli_env(),
-            )
-        except FileNotFoundError:
-            log.error("Claude CLI not found: %s", CLAUDE_CLI)
-            yield {
-                "data": json.dumps(
-                    _make_chunk(
-                        comp_id,
-                        created,
-                        model,
-                        content=f"[Error: Claude CLI not found: {CLAUDE_CLI}]",
-                    )
-                )
-            }
-            yield {"data": "[DONE]"}
-            return
-
-        sent_any = False
-        async for line in proc.stdout:
-            line = line.decode(errors="replace").strip()
-            if not line:
-                continue
             try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            # Pick up session_id from system event
-            if event.get("type") == "system" and event.get("session_id"):
-                comp_id = f"chatcmpl-{event['session_id']}"
-
-            text = _extract_cli_text(event)
-            if text:
-                yield {
-                    "data": json.dumps(
-                        _make_chunk(comp_id, created, model, content=text)
-                    )
-                }
-                sent_any = True
-
-        await proc.wait()
-
-        if proc.returncode != 0:
-            log.error("CLI stream error (rc=%d)", proc.returncode)
-            if not sent_any:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=_get_cli_env(),
+                )
+            except FileNotFoundError:
+                log.error("Claude CLI not found: %s", CLAUDE_CLI)
                 yield {
                     "data": json.dumps(
                         _make_chunk(
                             comp_id,
                             created,
                             model,
-                            content="[Error: Claude CLI exited with an error]",
+                            content=f"[Error: Claude CLI not found: {CLAUDE_CLI}]",
                         )
                     )
                 }
+                yield {"data": "[DONE]"}
+                return
 
-        yield {
-            "data": json.dumps(
-                _make_chunk(
-                    comp_id, created, model, finish_reason="stop"
+            sent_any = False
+            async for line in proc.stdout:
+                line = line.decode(errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                # Pick up session_id from system event
+                if event.get("type") == "system" and event.get("session_id"):
+                    comp_id = f"chatcmpl-{event['session_id']}"
+
+                text = _extract_cli_text(event)
+                if text:
+                    yield {
+                        "data": json.dumps(
+                            _make_chunk(comp_id, created, model, content=text)
+                        )
+                    }
+                    sent_any = True
+
+            await proc.wait()
+
+            if proc.returncode != 0:
+                log.error("CLI stream error (rc=%d)", proc.returncode)
+                if not sent_any:
+                    yield {
+                        "data": json.dumps(
+                            _make_chunk(
+                                comp_id,
+                                created,
+                                model,
+                                content="[Error: Claude CLI exited with an error]",
+                            )
+                        )
+                    }
+
+            yield {
+                "data": json.dumps(
+                    _make_chunk(
+                        comp_id, created, model, finish_reason="stop"
+                    )
                 )
-            )
-        }
-        yield {"data": "[DONE]"}
+            }
+            yield {"data": "[DONE]"}
+        finally:
+            if proc and proc.returncode is None:
+                try:
+                    proc.terminate()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
 
     return EventSourceResponse(event_generator())
 

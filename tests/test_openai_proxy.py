@@ -398,7 +398,7 @@ class TestMessagesToPromptString:
                 {"type": "text", "text": "World"},
             ]},
         ])
-        assert "[User]: Hello World" in result
+        assert "[User]: Hello\nWorld" in result
 
     def test_empty_messages(self):
         assert _messages_to_prompt_string([]) == ""
