@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +17,7 @@ from llm_mcp_stack.openai_proxy import (
     _build_anthropic_kwargs,
     _build_cli_cmd,
     _extract_cli_text,
+    _flatten_content,
     _make_chunk,
     _map_stop_reason,
     _messages_to_prompt_string,
@@ -93,6 +95,50 @@ class TestResolveModel:
 
     def test_unknown_model_passes_through(self):
         assert _resolve_model("some-custom-model") == "some-custom-model"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _flatten_content
+# ---------------------------------------------------------------------------
+
+
+class TestFlattenContent:
+    def test_string_passthrough(self):
+        assert _flatten_content("hello") == "hello"
+
+    def test_empty_list(self):
+        assert _flatten_content([]) == ""
+
+    def test_text_blocks_joined(self):
+        content = [
+            {"type": "text", "text": "Hello"},
+            {"type": "text", "text": "World"},
+        ]
+        assert _flatten_content(content) == "Hello\nWorld"
+
+    def test_non_text_dict_blocks_dropped_with_warning(self, caplog):
+        content = [
+            {"type": "text", "text": "Look at this"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+        ]
+        with caplog.at_level(logging.WARNING, logger="openai-proxy"):
+            result = _flatten_content(content)
+        assert result == "Look at this"
+        assert "Dropping unsupported content block type=image_url" in caplog.text
+
+    def test_mixed_dict_and_string_list(self):
+        content = [
+            {"type": "text", "text": "Hello"},
+            "World",
+        ]
+        assert _flatten_content(content) == "Hello\nWorld"
+
+    def test_non_string_non_list_returns_empty(self):
+        assert _flatten_content(42) == ""
+        assert _flatten_content({"key": "value"}) == ""
+
+    def test_none_returns_empty(self):
+        assert _flatten_content(None) == ""
 
 
 # ---------------------------------------------------------------------------

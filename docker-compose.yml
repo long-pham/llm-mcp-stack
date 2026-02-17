@@ -3,7 +3,7 @@ services:
   # SearXNG - Privacy-respecting metasearch engine
   # ===========================================
   searxng:
-    image: searxng/searxng:latest
+    image: searxng/searxng:2026.2.16-8e824017d
     container_name: searxng
     restart: unless-stopped
     ports:
@@ -34,7 +34,7 @@ services:
   # SearXNG MCP Server - Connects SearXNG to MCP
   # ===========================================
   searxng-mcp:
-    image: isokoliuk/mcp-searxng:latest
+    image: isokoliuk/mcp-searxng:0.8.0
     container_name: searxng-mcp
     restart: unless-stopped
     ports:
@@ -47,12 +47,18 @@ services:
         condition: service_healthy
     networks:
       - mcp-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/sse"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # ===========================================
   # Crawl4AI - Web crawling and scraping MCP
   # ===========================================
   crawl4ai:
-    image: unclecode/crawl4ai:latest
+    image: unclecode/crawl4ai:0.8.0
     container_name: crawl4ai
     restart: unless-stopped
     ports:
@@ -84,7 +90,7 @@ services:
   # MCPHub - MCP Aggregator/Gateway
   # ===========================================
   mcphub:
-    image: samanhappy/mcphub:latest
+    image: samanhappy/mcphub:0.12.3
     container_name: mcphub
     restart: unless-stopped
     ports:
@@ -95,7 +101,7 @@ services:
       - mcp-network
     depends_on:
       searxng-mcp:
-        condition: service_started
+        condition: service_healthy
       crawl4ai:
         condition: service_healthy
     healthcheck:

@@ -59,6 +59,10 @@ CORS_ORIGINS: list[str] = [o.strip() for o in _cors_raw.split(",") if o.strip()]
 CLAUDE_CLI = os.environ.get("CLAUDE_CLI", "claude")
 CLAUDE_FLAGS_RAW = os.environ.get("CLAUDE_FLAGS", "")
 CLAUDE_FLAGS = shlex.split(CLAUDE_FLAGS_RAW) if CLAUDE_FLAGS_RAW else []
+CLI_TIMEOUT = int(os.environ.get("OPENAI_PROXY_CLI_TIMEOUT", "300"))
+
+# Maximum request body size (bytes).
+MAX_BODY_SIZE = int(os.environ.get("OPENAI_PROXY_MAX_BODY_SIZE", str(10 * 1024 * 1024)))
 
 # Map common OpenAI model names to Claude equivalents
 MODEL_MAP: dict[str, str] = {
@@ -236,10 +240,16 @@ def _flatten_content(content: Any) -> str:
             if isinstance(part, dict):
                 if part.get("type") == "text":
                     parts.append(part.get("text", ""))
+                else:
+                    log.warning(
+                        "Dropping unsupported content block type=%s (multimodal content is not supported)",
+                        part.get("type"),
+                    )
             elif isinstance(part, str):
                 parts.append(part)
         return "\n".join(parts)
     return ""
+
 
 def _extract_system_prompt(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
     """Extracts the system prompt and returns the remaining messages."""
@@ -253,6 +263,7 @@ def _extract_system_prompt(messages: list[dict[str, Any]]) -> tuple[str | None, 
     
     system_prompt = "\n\n".join(system_parts) if system_parts else None
     return system_prompt, other_messages
+
 
 def _convert_and_merge_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Converts messages to Anthropic format and merges consecutive same-role messages."""
@@ -308,8 +319,18 @@ def _validate_chat_body(body: Any) -> str | None:
     return None
 
 
+_UNSUPPORTED_OPENAI_PARAMS = (
+    "n", "frequency_penalty", "presence_penalty", "tools",
+    "functions", "response_format", "logprobs", "seed",
+)
+
+
 def _build_anthropic_kwargs(body: dict[str, Any]) -> dict[str, Any]:
     """Build Anthropic API kwargs from an OpenAI-format request body."""
+    for param in _UNSUPPORTED_OPENAI_PARAMS:
+        if param in body:
+            log.warning("Ignoring unsupported OpenAI parameter: %s", param)
+
     model = _resolve_model(body.get("model"))
     system_prompt, messages = _translate_messages(body.get("messages", []))
 
@@ -557,6 +578,8 @@ async def _cli_chat(
     system_prompt, _ = _extract_system_prompt(messages)
 
     max_tokens = body.get("max_tokens")
+    if max_tokens is None:
+        max_tokens = MAX_OUTPUT_TOKENS.get(model, 8_192)
 
     cmd = _build_cli_cmd(
         prompt,
@@ -575,7 +598,19 @@ async def _cli_chat(
             stderr=asyncio.subprocess.PIPE,
             env=_get_cli_env(),
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=CLI_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            log.error("CLI process timed out after %ds", CLI_TIMEOUT)
+            return _openai_error(
+                f"CLI process timed out after {CLI_TIMEOUT}s",
+                status=504,
+                err_type="timeout_error",
+            )
     except FileNotFoundError:
         log.error("Claude CLI not found: %s", CLAUDE_CLI)
         return _openai_error(
@@ -651,6 +686,8 @@ async def _cli_chat_stream(
     system_prompt, _ = _extract_system_prompt(messages)
 
     max_tokens = body.get("max_tokens")
+    if max_tokens is None:
+        max_tokens = MAX_OUTPUT_TOKENS.get(model, 8_192)
 
     cmd = _build_cli_cmd(
         prompt,
@@ -748,7 +785,11 @@ async def _cli_chat_stream(
             if proc and proc.returncode is None:
                 try:
                     proc.terminate()
-                    await proc.wait()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        await proc.wait()
                 except ProcessLookupError:
                     pass
 
@@ -775,6 +816,14 @@ async def chat_completions(
     request: Request,
     x_session_id: str | None = Header(None),
 ):
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_BODY_SIZE:
+        return _openai_error(
+            f"Request body too large (limit {MAX_BODY_SIZE} bytes)",
+            status=413,
+            err_type="invalid_request_error",
+        )
+
     try:
         body = await request.json()
     except Exception:
