@@ -6,14 +6,10 @@ services:
     image: searxng/searxng:2026.2.16-8e824017d
     container_name: searxng
     restart: unless-stopped
-    ports:
-      - "${SEARXNG_PORT:-38080}:8080"
     volumes:
       - ./searxng/config:/etc/searxng:rw
       - ./searxng/data:/var/cache/searxng:rw
     environment:
-      - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-38080}/
-      - INSTANCE_NAME=llm-search
       - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:?SEARXNG_SECRET_KEY is required in .env}
     cap_drop:
       - ALL
@@ -24,7 +20,7 @@ services:
     networks:
       - mcp-network
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -48,7 +44,7 @@ services:
     networks:
       - mcp-network
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/sse"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -94,7 +90,7 @@ services:
     container_name: mcphub
     restart: unless-stopped
     ports:
-      - "${MCPHUB_PORT:-3000}:3000"
+      - "${MCPHUB_PORT:-33000}:3000"
     volumes:
       - ./mcphub/mcp_settings.json:/app/mcp_settings.json
     networks:
@@ -110,6 +106,23 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  # ===========================================
+  # claude-switch test runner
+  # ===========================================
+  # claude-switch-test:
+  #   build:
+  #     context: .
+  #     dockerfile: claude-switch/Dockerfile.test
+  #   container_name: claude-switch-test
+  #   volumes:
+  #     - ~/.claude:/host-claude:ro
+  #     - ~/.claude.json:/host-claude-json:ro
+  #   environment:
+  #     - TEST_PROXY_URL=http://host.docker.internal:11212/api/anthropic
+  #     - TEST_PROXY_KEY=test-key
+  #   profiles:
+  #     - test
 
 networks:
   mcp-network:

@@ -1,0 +1,37 @@
+FROM node:20-slim
+
+# System deps: python3, bash, curl, git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv \
+    bash curl git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv (fast Python package manager)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code 2>/dev/null || true
+
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+COPY src/ src/
+COPY tests/ tests/
+COPY claude-switch/ claude-switch/
+
+# Python deps (including pytest)
+RUN uv sync --group dev
+
+# Install claude-switch into PATH
+RUN mkdir -p /root/.local/bin && \
+    cp claude-switch/claude-switch.sh /root/.local/bin/claude-switch && \
+    chmod +x /root/.local/bin/claude-switch
+
+RUN mkdir -p /root/.claude /root/.config/claude-switch
+
+ENV PATH="/root/.local/bin:$PATH"
+
+# Entrypoint: copy host auth from read-only mount, then run tests
+COPY claude-switch/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["uv", "run", "pytest", "tests/test_claude_switch.py", "-v"]

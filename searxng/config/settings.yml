@@ -12,15 +12,14 @@ search:
   # Safe search disabled for unrestricted LLM queries
   # Set to 1 (moderate) or 2 (strict) if content filtering is needed
   safe_search: 0
-  autocomplete: "duckduckgo"
+  autocomplete: ""
   default_lang: "en"
   formats:
     - html
     - json
 
 server:
-  # Bind to all interfaces for Docker networking
-  # WARNING: Ensure firewall blocks external access to port 38080
+  # Bind to all interfaces for Docker networking (port not exposed to host)
   bind_address: "0.0.0.0"
   port: 8080
   # Secret key loaded from environment variable (set SEARXNG_SECRET_KEY in .env)
@@ -31,7 +30,6 @@ server:
   public_instance: false
 
 ui:
-  static_use_hash: true
   default_theme: simple
   results_on_new_tab: false
 
@@ -58,7 +56,7 @@ engines:
   - name: bing
     engine: bing
     shortcut: bi
-    disabled: false
+    disabled: true
 
   - name: wikipedia
     engine: wikipedia
