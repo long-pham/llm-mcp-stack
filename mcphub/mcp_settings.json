@@ -6,6 +6,9 @@
     },
     "crawl4ai": {
       "url": "http://crawl4ai:11235/mcp/sse"
+    },
+    "paper-search": {
+      "url": "http://paper-search:8000/sse"
     }
   },
   "systemConfig": {

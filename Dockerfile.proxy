@@ -1,0 +1,44 @@
+# Combined image for OpenAI Proxy with support for both Anthropic API and Claude CLI
+FROM node:20-slim
+
+# Install Python and system deps
+RUN apt-get update && apt-get install -y --no-install-recommends 
+    python3 python3-pip python3-venv 
+    bash curl git ca-certificates 
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (fast Python package manager)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Install Claude Code CLI (for the 'cli' backend)
+RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+
+WORKDIR /app
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install Python dependencies
+RUN uv sync --frozen --no-dev
+
+# Copy source code
+COPY src/ src/
+
+# Run as non-root
+# Note: Claude CLI might need a home directory for auth/config
+RUN useradd -m -u 1000 mcpuser
+RUN mkdir -p /home/mcpuser/.claude /home/mcpuser/.config && 
+    chown -R mcpuser:mcpuser /home/mcpuser
+
+USER mcpuser
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV OPENAI_PROXY_PORT=8090
+ENV CLAUDE_CLI=claude
+
+EXPOSE 8090
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=10s 
+  CMD curl -f http://localhost:8090/health || exit 1
+
+ENTRYPOINT ["uv", "run", "llm-mcp-proxy"]

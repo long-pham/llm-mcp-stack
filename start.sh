@@ -82,7 +82,10 @@ load_env_file
 # Set default ports if not configured
 SEARXNG_MCP_PORT=${SEARXNG_MCP_PORT:-38081}
 CRAWL4AI_PORT=${CRAWL4AI_PORT:-11235}
+CRAWL4AI_MAX_TASKS=${CRAWL4AI_MAX_TASKS:-10}
+PAPER_SEARCH_PORT=${PAPER_SEARCH_PORT:-38082}
 MCPHUB_PORT=${MCPHUB_PORT:-3000}
+OPENAI_PROXY_PORT=${OPENAI_PROXY_PORT:-8090}
 
 # Start all services
 echo "Starting LLM MCP services..."
@@ -111,12 +114,14 @@ wait_healthy() {
 wait_healthy searxng
 wait_healthy searxng-mcp
 wait_healthy crawl4ai
+wait_healthy paper-search
 wait_healthy mcphub
 
 echo ""
 echo "Services started! Endpoints:"
 echo "  - SearXNG MCP:    http://localhost:${SEARXNG_MCP_PORT}/mcp"
 echo "  - Crawl4AI MCP:   http://localhost:${CRAWL4AI_PORT}/mcp/sse"
+echo "  - Paper Search:   http://localhost:${PAPER_SEARCH_PORT}/sse"
 echo "  - MCPHub:         http://localhost:${MCPHUB_PORT}"
 echo ""
 echo "To add to Claude Code (aggregated via MCPHub):"
@@ -125,6 +130,7 @@ echo ""
 echo "Or add individual servers:"
 echo "  claude mcp add --transport sse --scope user crawl4ai http://localhost:${CRAWL4AI_PORT}/mcp/sse"
 echo "  claude mcp add --transport http --scope user searxng http://localhost:${SEARXNG_MCP_PORT}/mcp"
+echo "  claude mcp add --transport sse --scope user paper-search http://localhost:${PAPER_SEARCH_PORT}/sse"
 echo ""
 echo "Check status: docker compose ps"
 echo "View logs:    docker compose logs -f"

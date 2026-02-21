@@ -39,7 +39,7 @@ outgoing:
   max_request_timeout: 30.0
   useragent_suffix: ""
   pool_connections: 100
-  pool_maxsize: 20
+  pool_maxsize: 50
 
 # Enabled search engines
 engines:

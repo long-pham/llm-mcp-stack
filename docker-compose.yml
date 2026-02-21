@@ -11,16 +11,31 @@ services:
       - ./searxng/data:/var/cache/searxng:rw
     environment:
       - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:?SEARXNG_SECRET_KEY is required in .env}
+      - UWSGI_WORKERS=${SEARXNG_WORKERS:-4}
+      - UWSGI_THREADS=${SEARXNG_THREADS:-4}
     cap_drop:
       - ALL
     cap_add:
       - CHOWN
       - SETGID
       - SETUID
+    security_opt:
+      - no-new-privileges:true
     networks:
       - mcp-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:8080/" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -38,13 +53,28 @@ services:
     environment:
       - SEARXNG_URL=http://searxng:8080
       - MCP_HTTP_PORT=8080
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       searxng:
         condition: service_healthy
     networks:
       - mcp-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:8080/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -60,37 +90,39 @@ services:
     ports:
       - "${CRAWL4AI_PORT:-11235}:11235"
     environment:
-      # API token optional - only set if you need auth
       - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN-}
-      - MAX_CONCURRENT_TASKS=${CRAWL4AI_MAX_TASKS:-5}
+      - MAX_CONCURRENT_TASKS=${CRAWL4AI_MAX_TASKS:-10}
     volumes:
       - crawl4ai-data:/app/data
-    # Shared memory for Chrome - critical for rendering
     shm_size: 2g
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mcp-network
     deploy:
       resources:
         limits:
-          memory: 4g
+          memory: 6g
         reservations:
-          memory: 1g
-    networks:
-      - mcp-network
+          memory: 2g
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:11235/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
 
- # ===========================================
+  # ===========================================
   # Paper Search - Multi-source academic paper search MCP
-  # Sources: arXiv, PubMed, PMC, bioRxiv, medRxiv, Google Scholar,
-  #          Semantic Scholar, Crossref, IACR, CORE, IEEE, Springer,
-  #          Scopus, ScienceDirect, ACM, WOS, JSTOR, ResearchGate
-  # https://github.com/LinXueyuanStdio/academic-mcp
   # ===========================================
   paper-search:
-    build: ./paper-search
+    build:
+      context: ./paper-search
     container_name: paper-search
     restart: unless-stopped
     ports:
@@ -101,10 +133,23 @@ services:
       - ACADEMIC_MCP_DISABLED_SOURCES=${PAPER_SEARCH_DISABLED:-}
     volumes:
       - paper-search-data:/data/papers
+    security_opt:
+      - no-new-privileges:true
     networks:
       - mcp-network
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/sse >/dev/null 2>&1 || nc -z localhost 8000 || exit 1"]
+      test: [ "CMD-SHELL", "curl -m 5 -sf http://localhost:8000/sse >/dev/null 2>&1 || [ $$? -eq 28 ] || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -121,6 +166,8 @@ services:
       - "${MCPHUB_PORT:-33000}:3000"
     volumes:
       - ./mcphub/mcp_settings.json:/app/mcp_settings.json
+    security_opt:
+      - no-new-privileges:true
     networks:
       - mcp-network
     depends_on:
@@ -128,29 +175,25 @@ services:
         condition: service_healthy
       crawl4ai:
         condition: service_healthy
+      paper-search:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/auth/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: [ "CMD", "node", "-e", "fetch('http://localhost:3000/api/auth/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
-
-  # ===========================================
-  # claude-switch test runner
-  # ===========================================
-  # claude-switch-test:
-  #   build:
-  #     context: .
-  #     dockerfile: claude-switch/Dockerfile.test
-  #   container_name: claude-switch-test
-  #   volumes:
-  #     - ~/.claude:/host-claude:ro
-  #     - ~/.claude.json:/host-claude-json:ro
-  #   environment:
-  #     - TEST_PROXY_URL=http://host.docker.internal:11212/api/anthropic
-  #     - TEST_PROXY_KEY=test-key
-  #   profiles:
-  #     - test
 
 networks:
   mcp-network:
