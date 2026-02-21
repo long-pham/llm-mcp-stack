@@ -82,6 +82,34 @@ services:
       retries: 3
       start_period: 30s
 
+ # ===========================================
+  # Paper Search - Multi-source academic paper search MCP
+  # Sources: arXiv, PubMed, PMC, bioRxiv, medRxiv, Google Scholar,
+  #          Semantic Scholar, Crossref, IACR, CORE, IEEE, Springer,
+  #          Scopus, ScienceDirect, ACM, WOS, JSTOR, ResearchGate
+  # https://github.com/LinXueyuanStdio/academic-mcp
+  # ===========================================
+  paper-search:
+    build: ./paper-search
+    container_name: paper-search
+    restart: unless-stopped
+    ports:
+      - "${PAPER_SEARCH_PORT:-38082}:8000"
+    environment:
+      - ACADEMIC_MCP_DOWNLOAD_PATH=/data/papers
+      - ACADEMIC_MCP_ENABLED_SOURCES=${PAPER_SEARCH_SOURCES:-}
+      - ACADEMIC_MCP_DISABLED_SOURCES=${PAPER_SEARCH_DISABLED:-}
+    volumes:
+      - paper-search-data:/data/papers
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/sse >/dev/null 2>&1 || nc -z localhost 8000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # ===========================================
   # MCPHub - MCP Aggregator/Gateway
   # ===========================================
@@ -130,3 +158,4 @@ networks:
 
 volumes:
   crawl4ai-data:
+  paper-search-data:
